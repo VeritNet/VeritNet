@@ -1,6 +1,7 @@
 ﻿/*
 * g++ -O3 -march=native -finline-functions -funroll-loops -mavx2 -o v3.exe v3.cpp
 * 如果需要极致的速度，请将O3替换为Ofast，但这将导致部分计算中出现精度丢失
+* If extreme speed is required, please replace O3 with Ofast, but this will result in loss of accuracy in some calculations
 * Test Version 2024.7.22.3
 */
 
@@ -380,12 +381,12 @@ int main() {
     memcpy(networkgs2, network2, 1240);
 
     batchSize = 40;
-    tpool->init(10);//BatchSize必须是线程数的正整数倍
+    tpool->init(10);//BatchSize must be a positive integer multiple of the number of threads. BatchSize必须是线程数的正整数倍
 
     //模型精度是Float，4个字节
-    rate = 0.003;//学习率
-    aim = 10;//目标损失值（是一个Epoch全部数据的MSE的总和）
-    dts = 60000;//多少个训练数据（最大60000）
+    rate = 0.003;//Learning Rate 学习率
+    aim = 10;//Aiming Loss(MSE in total) 目标损失值（是一个Epoch全部数据的MSE的总和）
+    dts = 60000;//Data Limited(Max 60000) 多少个训练数据（最大60000）
 
     std::cout << "2/3 Load Training Data" << endl;
 
