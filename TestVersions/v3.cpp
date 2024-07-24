@@ -1,8 +1,7 @@
 ﻿/*
-* g++ -O3 -march=native -finline-functions -funroll-loops -mavx2 -o v3.exe v3.cpp
+* g++ -O3 -march=native -funroll-loops -mavx2 -o v3.exe v3.cpp
 * 如果需要极致的速度，请将O3替换为Ofast，但这将导致部分计算中出现精度丢失
-* If extreme speed is required, please replace O3 with Ofast, but this will result in loss of accuracy in some calculations
-* Test Version 2024.7.22.3
+* Test Version 2024.7.24.3
 */
 
 #include <iostream>
@@ -53,26 +52,35 @@ public:
 };
 TP* tpool = new TP;
 int dts;
-float network0[128][784 + 1];
-float network1[30][128 + 1];
-float network2[10][30 + 1];
+//float network0[128][784 + 1];
+float(*network0)[784 + 1] = new float[128][784 + 1];
+//float network1[30][128 + 1];
+float(*network1)[128 + 1] = new float[30][128 + 1];
+//float network2[10][30 + 1];
+float(*network2)[30 + 1] = new float[10][30 + 1];
 int batchSize;
 float MSETotal;
-float networkgs0[128][784 + 1];
+//float networkgs0[128][784 + 1];
+float(*networkgs0)[784 + 1] = new float[128][784 + 1];
 std::vector<std::mutex> networkgs0_mtx(16);
-float networkgs1[30][128 + 1];
+//float networkgs1[30][128 + 1];
+float(*networkgs1)[128 + 1] = new float[30][128 + 1];
 std::vector<std::mutex> networkgs1_mtx(3);
-float networkgs2[10][30 + 1];
+//float networkgs2[10][30 + 1];
+float(*networkgs2)[30 + 1] = new float[10][30 + 1];
 std::vector<std::mutex> networkgs2_mtx(1);
 bool gate;
 int reportI = 0;
 float rate, aim, err;
 inline void trainNet(int TId) {
-    float networkg0[128][784 + 1] = { 0 };//线程累加梯度
+    //float networkg0[128][784 + 1] = { 0 };//线程累加梯度
+    float(*networkg0)[784 + 1] = new float[128][784 + 1]{};
     vector<bool> networkg0_todoList(16);
-    float networkg1[30][128 + 1] = { 0 };
+    //float networkg1[30][128 + 1] = { 0 };
+    float(*networkg1)[128 + 1] = new float[30][128 + 1]{};
     vector<bool> networkg1_todoList(3);
-    float networkg2[10][30 + 1] = { 0 };
+    //float networkg2[10][30 + 1] = { 0 };
+    float(*networkg2)[30 + 1] = new float[10][30 + 1]{};
     vector<bool> networkg2_todoList(1);
     float MSError;
 
@@ -223,20 +231,24 @@ inline void trainNet(int TId) {
         }
 
         //MiniBatch SGD
-        networkgs2_mtx[0].lock();
-        for (p = 0; p < 10; p++) {
-            for (i = 0; i + 7 < 16; i += 8) {
-                _mm256_storeu_ps(networkgs2[p] + i, _mm256_add_ps(_mm256_loadu_ps(networkg2[p] + i), _mm256_loadu_ps(networkgs2[p] + i)));
-            }
-            for (; i < 16; ++i) {
-                networkgs2[p][i] += networkg2[p][i];
-            }
-        }
-        networkgs2_mtx[0].unlock();
-
+        mtx_index_2 = 0;
         mtx_index_1 = 0;
         mtx_index_0 = 0;
-        for (; !networkg1_todoList[0] || !networkg1_todoList[1] || !networkg1_todoList[2] || !networkg0_todoList[0] || !networkg0_todoList[1] || !networkg0_todoList[2] || !networkg0_todoList[3] || !networkg0_todoList[4] || !networkg0_todoList[5] || !networkg0_todoList[6] || !networkg0_todoList[7] || !networkg0_todoList[8] || !networkg0_todoList[9] || !networkg0_todoList[10] || !networkg0_todoList[11] || !networkg0_todoList[12] || !networkg0_todoList[13] || !networkg0_todoList[14] || !networkg0_todoList[15];) {
+        for (; !networkg2_todoList[0] || !networkg1_todoList[0] || !networkg1_todoList[1] || !networkg1_todoList[2] || !networkg0_todoList[0] || !networkg0_todoList[1] || !networkg0_todoList[2] || !networkg0_todoList[3] || !networkg0_todoList[4] || !networkg0_todoList[5] || !networkg0_todoList[6] || !networkg0_todoList[7] || !networkg0_todoList[8] || !networkg0_todoList[9] || !networkg0_todoList[10] || !networkg0_todoList[11] || !networkg0_todoList[12] || !networkg0_todoList[13] || !networkg0_todoList[14] || !networkg0_todoList[15];) {
+            if (!networkg2_todoList[0]) {
+                if (networkgs2_mtx[mtx_index_2].try_lock()) {
+                    for (p = 0; p < 10; p++) {
+                        for (i = 0; i + 7 < 16; i += 8) {
+                            _mm256_storeu_ps(networkgs2[p] + i, _mm256_add_ps(_mm256_loadu_ps(networkg2[p] + i), _mm256_loadu_ps(networkgs2[p] + i)));
+                        }
+                        for (; i < 16; ++i) {
+                            networkgs2[p][i] += networkg2[p][i];
+                        }
+                    }
+                    networkgs2_mtx[mtx_index_2].unlock();
+                    networkg2_todoList[mtx_index_2] = true;
+                }
+            }
             for (mtx_index_1 = 0; mtx_index_1 < 3; mtx_index_1++) {
                 if (!networkg1_todoList[mtx_index_1]) {
                     if (networkgs1_mtx[mtx_index_1].try_lock()) {
@@ -381,18 +393,18 @@ int main() {
     memcpy(networkgs2, network2, 1240);
 
     batchSize = 40;
-    tpool->init(10);//BatchSize must be a positive integer multiple of the number of threads. BatchSize必须是线程数的正整数倍
+    tpool->init(10);//BatchSize必须是线程数的正整数倍
 
     //模型精度是Float，4个字节
-    rate = 0.003;//Learning Rate 学习率
-    aim = 10;//Aiming Loss(MSE in total) 目标损失值（是一个Epoch全部数据的MSE的总和）
-    dts = 60000;//Data Limited(Max 60000) 多少个训练数据（最大60000）
+    rate = 0.0003;//学习率
+    aim = 1;//目标损失值（是一个Epoch全部数据的MSE的总和）
+    dts = 10000;//多少个训练数据（最大60000）
 
     std::cout << "2/3 Load Training Data" << endl;
 
-    //====================================================================
-    //转自 https://www.cnblogs.com/ppDoo/p/13261258.html                //
-    //仅用于测试                                                        //
+    //================================================================
+    //转自 https://www.cnblogs.com/ppDoo/p/13261258.html            //
+    //仅用于测试                                                    //
     char train_image_name[] = "train-images.idx3-ubyte";            //
     char train_label_name[] = "train-labels.idx1-ubyte";            //
     vector< vector<int> > train_feature_vector;                     //
@@ -401,7 +413,7 @@ int main() {
     vector<int> train_labels;                                       //
     read_Mnist_Label(train_label_name, train_labels);               //
     convert_array_label(train_labels);                              //
-    //====================================================================
+    //================================================================
 
     std::cout << "3/3 Ready" << endl;
     system("cls");
