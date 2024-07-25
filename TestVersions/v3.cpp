@@ -1,4 +1,5 @@
 ﻿/*
+* !!!Bug has occurred in Linux and is being fixed. The current version does not achieve extreme performance. It is recommended to wait for v4.
 * g++ -O3 -march=native -funroll-loops -mavx2 -o v3.exe v3.cpp
 * 如果需要极致的速度，请将O3替换为Ofast，但这将导致部分计算中出现精度丢失
 * If extreme speed is required, please replace O3 with Ofast, but this will result in loss of accuracy in some calculations
