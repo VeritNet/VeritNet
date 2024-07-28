@@ -1,8 +1,7 @@
 ﻿/*
-* g++ -O3 -march=native -funroll-loops -mavx2 -o v4.exe v4.cpp
-* Test Version 2024.7.26.4
+* g++ -O3 -std=c++20 -march=native -funroll-all-loops -mavx2 -o v4.exe v4.cpp
+* Test Version 2024.7.28.4
 * [128 Elu, 32 Elu, 10 Softmax]
-* Notice: Ubuntu20.04 is not supported, please update to Ubuntu24 or compile in Windows
 */
 
 #include <iostream>
@@ -15,6 +14,7 @@
 #include <deque>
 #include <chrono>
 #include <atomic>
+#include <semaphore>
 #include <immintrin.h>
 
 #include "loadMNIST.h"
@@ -27,12 +27,12 @@ std::mutex mtx;//Global Mutex Lock
 //Thread Pool
 class TP {
 public:
-    deque<atomic<bool>> TGate;//Wake Conditon
+    vector<std::counting_semaphore<1>*> TGate;//Wake Conditon
     deque<atomic<bool>> TFree;//Is Free
     vector/*Threads*/< vector<vector<float>> > TData0;//Input Data
     vector/*Threads*/< vector<vector<float>> > TData1;//Label
     int TSize;//Num of threads
-    void init(int size);//Create & Detach
+    std::vector<std::thread> init(int size);//Create & Detach
     inline void add(vector<vector<float>>& inputDt0, vector<vector<float>>& inputDt1) {//Add Task
         bool noBreak = true;
         while (noBreak) {
@@ -44,7 +44,8 @@ public:
                     TData0[i] = inputDt0;
                     TData1[i] = inputDt1;
                     mtx.unlock();
-                    TGate[i].store(true);//Wake
+                    //TGate[i].store(true);//Wake
+                    TGate[i]->release();
                     noBreak = false;
                     break;
                 }
@@ -65,20 +66,22 @@ float(*networkgs0)[784 + 1] = new float[128][784 + 1];
 float(*networkgs1)[128 + 1] = new float[32][128 + 1];
 float(*networkgs2)[32 + 1] = new float[10][32 + 1];
 //Locks for Blocks
-std::vector<std::mutex> networkgs0_mtx(16);
-std::vector<std::mutex> networkgs1_mtx(4);
+std::vector<std::mutex> networkgs0_mtx(8);
+std::vector<std::mutex> networkgs1_mtx(1);
 std::vector<std::mutex> networkgs2_mtx(1);
 bool gate;//Main Thread Gate
 int reportI = 0;
 float rate, aim, err;//Learning Rate, MSE aim, Cost of 1 Epoch
 inline void trainNet(int TId/*Thread Id*/) {
+    tpool->TGate[TId] = new std::counting_semaphore<1>(0);
+
     //Network Gradients (Thread Memory)
     float(*networkg0)[784 + 1] = new float[128][784 + 1]{};
     float(*networkg1)[128 + 1] = new float[32][128 + 1]{};
     float(*networkg2)[32 + 1] = new float[10][32 + 1]{};
     //Block update of gradients in shared memory
-    vector<bool> networkg0_todoList(16);
-    vector<bool> networkg1_todoList(4);
+    vector<bool> networkg0_todoList(8);
+    vector<bool> networkg1_todoList(1);
     vector<bool> networkg2_todoList(1);
     
     float MSError{};//Error Sum of All Data in this Epoch in this Thread
@@ -103,8 +106,7 @@ inline void trainNet(int TId/*Thread Id*/) {
 
 
     for (;;) {
-        while (tpool->TGate[TId].load()==false) {}//Wait
-        tpool->TGate[TId].store(false);//Working
+        tpool->TGate[TId]->acquire();
         for (dtIndex = tpool->TData0[TId].size() - 1; dtIndex >= 0; dtIndex--) {//Train all data in this task
             //Feed Forward
             //Input Layer - Hidden Layer 0
@@ -315,7 +317,7 @@ inline void trainNet(int TId/*Thread Id*/) {
         mtx_index_2 = 0;
         mtx_index_1 = 0;
         mtx_index_0 = 0;
-        for (; !networkg2_todoList[0] || !networkg1_todoList[0] || !networkg1_todoList[1] || !networkg1_todoList[2] || !networkg1_todoList[3] || !networkg0_todoList[0] || !networkg0_todoList[1] || !networkg0_todoList[2] || !networkg0_todoList[3] || !networkg0_todoList[4] || !networkg0_todoList[5] || !networkg0_todoList[6] || !networkg0_todoList[7] || !networkg0_todoList[8] || !networkg0_todoList[9] || !networkg0_todoList[10] || !networkg0_todoList[11] || !networkg0_todoList[12] || !networkg0_todoList[13] || !networkg0_todoList[14] || !networkg0_todoList[15];) {//Update All Blocks
+        for (; !networkg2_todoList[0] || !networkg1_todoList[0] || !networkg0_todoList[0] || !networkg0_todoList[1] || !networkg0_todoList[2] || !networkg0_todoList[3] || !networkg0_todoList[4] || !networkg0_todoList[5] || !networkg0_todoList[6] || !networkg0_todoList[7];) {//Update All Blocks
             //Find a Free Block to update
             if (!networkg2_todoList[0]) {
                 if (networkgs2_mtx[mtx_index_2].try_lock()) {
@@ -337,57 +339,55 @@ inline void trainNet(int TId/*Thread Id*/) {
                     networkg2_todoList[mtx_index_2] = true;
                 }
             }
-            for (mtx_index_1 = 0; mtx_index_1 < 4; mtx_index_1++) {
-                if (!networkg1_todoList[mtx_index_1]) {
-                    if (networkgs1_mtx[mtx_index_1].try_lock()) {
-                        for (p = 0; p < 8; p++) {
-                            i = 0;
-                            for (; i <= 129 - 64; i += 64) {
-                                _mm_prefetch((const char*)(networkg1[mtx_index_1 * 8 + p] + i + 64), _MM_HINT_T0);
-                                _mm_prefetch((const char*)(networkgs1[mtx_index_1 * 8 + p] + i + 64), _MM_HINT_T0);
-                                _mm256_storeu_ps(networkgs1[mtx_index_1 * 8 + p] + i, _mm256_add_ps(_mm256_loadu_ps(networkg1[mtx_index_1 * 8 + p] + i), _mm256_loadu_ps(networkgs1[mtx_index_1 * 8 + p] + i)));
-                                _mm256_storeu_ps(networkgs1[mtx_index_1 * 8 + p] + i + 8, _mm256_add_ps(_mm256_loadu_ps(networkg1[mtx_index_1 * 8 + p] + i + 8), _mm256_loadu_ps(networkgs1[mtx_index_1 * 8 + p] + i + 8)));
-                                _mm256_storeu_ps(networkgs1[mtx_index_1 * 8 + p] + i + 16, _mm256_add_ps(_mm256_loadu_ps(networkg1[mtx_index_1 * 8 + p] + i + 16), _mm256_loadu_ps(networkgs1[mtx_index_1 * 8 + p] + i + 16)));
-                                _mm256_storeu_ps(networkgs1[mtx_index_1 * 8 + p] + i + 24, _mm256_add_ps(_mm256_loadu_ps(networkg1[mtx_index_1 * 8 + p] + i + 24), _mm256_loadu_ps(networkgs1[mtx_index_1 * 8 + p] + i + 24)));
-                                _mm256_storeu_ps(networkgs1[mtx_index_1 * 8 + p] + i + 32, _mm256_add_ps(_mm256_loadu_ps(networkg1[mtx_index_1 * 8 + p] + i + 32), _mm256_loadu_ps(networkgs1[mtx_index_1 * 8 + p] + i + 32)));
-                                _mm256_storeu_ps(networkgs1[mtx_index_1 * 8 + p] + i + 40, _mm256_add_ps(_mm256_loadu_ps(networkg1[mtx_index_1 * 8 + p] + i + 40), _mm256_loadu_ps(networkgs1[mtx_index_1 * 8 + p] + i + 40)));
-                                _mm256_storeu_ps(networkgs1[mtx_index_1 * 8 + p] + i + 48, _mm256_add_ps(_mm256_loadu_ps(networkg1[mtx_index_1 * 8 + p] + i + 48), _mm256_loadu_ps(networkgs1[mtx_index_1 * 8 + p] + i + 48)));
-                                _mm256_storeu_ps(networkgs1[mtx_index_1 * 8 + p] + i + 56, _mm256_add_ps(_mm256_loadu_ps(networkg1[mtx_index_1 * 8 + p] + i + 56), _mm256_loadu_ps(networkgs1[mtx_index_1 * 8 + p] + i + 56)));
-                            }
-                            for (; i < 129; ++i) {
-                                networkgs1[mtx_index_1 * 8 + p][i] += networkg1[mtx_index_1 * 8 + p][i];
-                            }
+            if (!networkg1_todoList[0]) {
+                if (networkgs1_mtx[mtx_index_1].try_lock()) {
+                    for (p = 0; p < 32; p++) {
+                        i = 0;
+                        for (; i <= 129 - 64; i += 64) {
+                            _mm_prefetch((const char*)(networkg1[p] + i + 64), _MM_HINT_T0);
+                            _mm_prefetch((const char*)(networkgs1[p] + i + 64), _MM_HINT_T0);
+                            _mm256_storeu_ps(networkgs1[p] + i, _mm256_add_ps(_mm256_loadu_ps(networkg1[p] + i), _mm256_loadu_ps(networkgs1[p] + i)));
+                            _mm256_storeu_ps(networkgs1[p] + i + 8, _mm256_add_ps(_mm256_loadu_ps(networkg1[p] + i + 8), _mm256_loadu_ps(networkgs1[p] + i + 8)));
+                            _mm256_storeu_ps(networkgs1[p] + i + 16, _mm256_add_ps(_mm256_loadu_ps(networkg1[p] + i + 16), _mm256_loadu_ps(networkgs1[p] + i + 16)));
+                            _mm256_storeu_ps(networkgs1[p] + i + 24, _mm256_add_ps(_mm256_loadu_ps(networkg1[p] + i + 24), _mm256_loadu_ps(networkgs1[p] + i + 24)));
+                            _mm256_storeu_ps(networkgs1[p] + i + 32, _mm256_add_ps(_mm256_loadu_ps(networkg1[p] + i + 32), _mm256_loadu_ps(networkgs1[p] + i + 32)));
+                            _mm256_storeu_ps(networkgs1[p] + i + 40, _mm256_add_ps(_mm256_loadu_ps(networkg1[p] + i + 40), _mm256_loadu_ps(networkgs1[p] + i + 40)));
+                            _mm256_storeu_ps(networkgs1[p] + i + 48, _mm256_add_ps(_mm256_loadu_ps(networkg1[p] + i + 48), _mm256_loadu_ps(networkgs1[p] + i + 48)));
+                            _mm256_storeu_ps(networkgs1[p] + i + 56, _mm256_add_ps(_mm256_loadu_ps(networkg1[p] + i + 56), _mm256_loadu_ps(networkgs1[p] + i + 56)));
                         }
-                        networkgs1_mtx[mtx_index_1].unlock();
-                        networkg1_todoList[mtx_index_1] = true;
+                        for (; i < 129; ++i) {
+                            networkgs1[p][i] += networkg1[p][i];
+                        }
                     }
+                    networkgs1_mtx[mtx_index_1].unlock();
+                    networkg1_todoList[mtx_index_1] = true;
                 }
             }
-            for (mtx_index_0 = 0; mtx_index_0 < 16; mtx_index_0++) {
+            for (mtx_index_0 = 0; mtx_index_0 < 8; mtx_index_0++) {
                 if (!networkg0_todoList[mtx_index_0]) {
                     if (networkgs0_mtx[mtx_index_0].try_lock()) {
-                        for (p = 0; p < 8; p++) {
+                        for (p = 0; p < 16; p++) {
                             i = 0;
                             for (; i <= 785 - 64; i += 64) {
-                                _mm_prefetch((const char*)(networkg0[mtx_index_0 * 8 + p] + i + 64), _MM_HINT_T0);
-                                _mm_prefetch((const char*)(networkgs0[mtx_index_0 * 8 + p] + i + 64), _MM_HINT_T0);
-                                _mm256_storeu_ps(networkgs0[mtx_index_0 * 8 + p] + i, _mm256_add_ps(_mm256_loadu_ps(networkg0[mtx_index_0 * 8 + p] + i), _mm256_loadu_ps(networkgs0[mtx_index_0 * 8 + p] + i)));
-                                _mm256_storeu_ps(networkgs0[mtx_index_0 * 8 + p] + i + 8, _mm256_add_ps(_mm256_loadu_ps(networkg0[mtx_index_0 * 8 + p] + i + 8), _mm256_loadu_ps(networkgs0[mtx_index_0 * 8 + p] + i + 8)));
-                                _mm256_storeu_ps(networkgs0[mtx_index_0 * 8 + p] + i + 16, _mm256_add_ps(_mm256_loadu_ps(networkg0[mtx_index_0 * 8 + p] + i + 16), _mm256_loadu_ps(networkgs0[mtx_index_0 * 8 + p] + i + 16)));
-                                _mm256_storeu_ps(networkgs0[mtx_index_0 * 8 + p] + i + 24, _mm256_add_ps(_mm256_loadu_ps(networkg0[mtx_index_0 * 8 + p] + i + 24), _mm256_loadu_ps(networkgs0[mtx_index_0 * 8 + p] + i + 24)));
-                                _mm256_storeu_ps(networkgs0[mtx_index_0 * 8 + p] + i + 32, _mm256_add_ps(_mm256_loadu_ps(networkg0[mtx_index_0 * 8 + p] + i + 32), _mm256_loadu_ps(networkgs0[mtx_index_0 * 8 + p] + i + 32)));
-                                _mm256_storeu_ps(networkgs0[mtx_index_0 * 8 + p] + i + 40, _mm256_add_ps(_mm256_loadu_ps(networkg0[mtx_index_0 * 8 + p] + i + 40), _mm256_loadu_ps(networkgs0[mtx_index_0 * 8 + p] + i + 40)));
-                                _mm256_storeu_ps(networkgs0[mtx_index_0 * 8 + p] + i + 48, _mm256_add_ps(_mm256_loadu_ps(networkg0[mtx_index_0 * 8 + p] + i + 48), _mm256_loadu_ps(networkgs0[mtx_index_0 * 8 + p] + i + 48)));
-                                _mm256_storeu_ps(networkgs0[mtx_index_0 * 8 + p] + i + 56, _mm256_add_ps(_mm256_loadu_ps(networkg0[mtx_index_0 * 8 + p] + i + 56), _mm256_loadu_ps(networkgs0[mtx_index_0 * 8 + p] + i + 56)));
+                                _mm_prefetch((const char*)(networkg0[mtx_index_0 * 16 + p] + i + 64), _MM_HINT_T0);
+                                _mm_prefetch((const char*)(networkgs0[mtx_index_0 * 16 + p] + i + 64), _MM_HINT_T0);
+                                _mm256_storeu_ps(networkgs0[mtx_index_0 * 16 + p] + i, _mm256_add_ps(_mm256_loadu_ps(networkg0[mtx_index_0 * 16 + p] + i), _mm256_loadu_ps(networkgs0[mtx_index_0 * 16 + p] + i)));
+                                _mm256_storeu_ps(networkgs0[mtx_index_0 * 16 + p] + i + 8, _mm256_add_ps(_mm256_loadu_ps(networkg0[mtx_index_0 * 16 + p] + i + 8), _mm256_loadu_ps(networkgs0[mtx_index_0 * 16 + p] + i + 8)));
+                                _mm256_storeu_ps(networkgs0[mtx_index_0 * 16 + p] + i + 16, _mm256_add_ps(_mm256_loadu_ps(networkg0[mtx_index_0 * 16 + p] + i + 16), _mm256_loadu_ps(networkgs0[mtx_index_0 * 16 + p] + i + 16)));
+                                _mm256_storeu_ps(networkgs0[mtx_index_0 * 16 + p] + i + 24, _mm256_add_ps(_mm256_loadu_ps(networkg0[mtx_index_0 * 16 + p] + i + 24), _mm256_loadu_ps(networkgs0[mtx_index_0 * 16 + p] + i + 24)));
+                                _mm256_storeu_ps(networkgs0[mtx_index_0 * 16 + p] + i + 32, _mm256_add_ps(_mm256_loadu_ps(networkg0[mtx_index_0 * 16 + p] + i + 32), _mm256_loadu_ps(networkgs0[mtx_index_0 * 16 + p] + i + 32)));
+                                _mm256_storeu_ps(networkgs0[mtx_index_0 * 16 + p] + i + 40, _mm256_add_ps(_mm256_loadu_ps(networkg0[mtx_index_0 * 16 + p] + i + 40), _mm256_loadu_ps(networkgs0[mtx_index_0 * 16 + p] + i + 40)));
+                                _mm256_storeu_ps(networkgs0[mtx_index_0 * 16 + p] + i + 48, _mm256_add_ps(_mm256_loadu_ps(networkg0[mtx_index_0 * 16 + p] + i + 48), _mm256_loadu_ps(networkgs0[mtx_index_0 * 16 + p] + i + 48)));
+                                _mm256_storeu_ps(networkgs0[mtx_index_0 * 16 + p] + i + 56, _mm256_add_ps(_mm256_loadu_ps(networkg0[mtx_index_0 * 16 + p] + i + 56), _mm256_loadu_ps(networkgs0[mtx_index_0 * 16 + p] + i + 56)));
                             }
                             for (; i <= 785 - 16; i += 16) {
-                                _mm_prefetch((const char*)(networkg0[mtx_index_0 * 8 + p] + i + 16), _MM_HINT_T0);
-                                _mm_prefetch((const char*)(networkgs0[mtx_index_0 * 8 + p] + i + 16), _MM_HINT_T0);
-                                _mm256_storeu_ps(networkgs0[mtx_index_0 * 8 + p] + i, _mm256_add_ps(_mm256_loadu_ps(networkg0[mtx_index_0 * 8 + p] + i), _mm256_loadu_ps(networkgs0[mtx_index_0 * 8 + p] + i)));
-                                _mm256_storeu_ps(networkgs0[mtx_index_0 * 8 + p] + i + 8, _mm256_add_ps(_mm256_loadu_ps(networkg0[mtx_index_0 * 8 + p] + i + 8), _mm256_loadu_ps(networkgs0[mtx_index_0 * 8 + p] + i + 8)));
+                                _mm_prefetch((const char*)(networkg0[mtx_index_0 * 16 + p] + i + 16), _MM_HINT_T0);
+                                _mm_prefetch((const char*)(networkgs0[mtx_index_0 * 16 + p] + i + 16), _MM_HINT_T0);
+                                _mm256_storeu_ps(networkgs0[mtx_index_0 * 16 + p] + i, _mm256_add_ps(_mm256_loadu_ps(networkg0[mtx_index_0 * 16 + p] + i), _mm256_loadu_ps(networkgs0[mtx_index_0 * 16 + p] + i)));
+                                _mm256_storeu_ps(networkgs0[mtx_index_0 * 16 + p] + i + 8, _mm256_add_ps(_mm256_loadu_ps(networkg0[mtx_index_0 * 16 + p] + i + 8), _mm256_loadu_ps(networkgs0[mtx_index_0 * 16 + p] + i + 8)));
                             }
                             for (; i < 785; ++i) {
-                                networkgs0[mtx_index_0 * 8 + p][i] += networkg0[mtx_index_0 * 8 + p][i];
+                                networkgs0[mtx_index_0 * 16 + p][i] += networkg0[mtx_index_0 * 16 + p][i];
                             }
                         }
                         networkgs0_mtx[mtx_index_0].unlock();
@@ -398,17 +398,15 @@ inline void trainNet(int TId/*Thread Id*/) {
         }
         //Init todoList
         networkg2_todoList[0] = false;
+        networkg1_todoList[0] = false;
         for (i = 0; i < 4; i++) {
-            networkg1_todoList[i] = false;
-        }
-        for (i = 0; i < 16; i++) {
             networkg0_todoList[i] = false;
         }
 
         //Clear Temp
-        fill(networkg0[0], networkg0[0] + 100480, 0);
-        fill(networkg1[0], networkg1[0] + 4128, 0);
-        fill(networkg2[0], networkg2[0] + 310, 0);
+        std::fill(networkg0[0], networkg0[0] + 100480, 0);
+        std::fill(networkg1[0], networkg1[0] + 4128, 0);
+        std::fill(networkg2[0], networkg2[0] + 310, 0);
 
         mtx.lock();
         MSETotal += MSError;//Add Lost to Global Cost of this Batch
@@ -430,15 +428,17 @@ inline void trainNet(int TId/*Thread Id*/) {
 }
 
 
-inline void TP::init(int size) {
+inline std::vector<std::thread> TP::init(int size) {
     TSize = size;
+    std::vector<std::thread> threads;
     for (int i = 0; i < size; i++) {
-        TGate.emplace_back(false);
+        TGate.emplace_back();
         TFree.emplace_back(true);
         TData0.push_back({});
         TData1.push_back({});
-        thread(trainNet, i).detach();
+        threads.push_back(thread(trainNet, i));
     }
+    return threads;
 }
 
 
@@ -458,8 +458,8 @@ void train(float rate, float aim) {
                     gate = false;
                     for (w = 0; w < batchSize; w += batchSize / tpool->TSize) {
                         for (dti = 0; dti < batchSize / tpool->TSize; dti++) {
-                            temp0[dti] = train_image[batchSize * c + w + dti];
-                            temp1[dti] = train_label[batchSize * c + w + dti];
+                            temp0[dti] = train_image[static_cast<std::vector<std::vector<float, std::allocator<float>>, std::allocator<std::vector<float, std::allocator<float>>>>::size_type>(batchSize) * c + w + dti];
+                            temp1[dti] = train_label[static_cast<std::vector<std::vector<float, std::allocator<float>>, std::allocator<std::vector<float, std::allocator<float>>>>::size_type>(batchSize) * c + w + dti];
                         }
                         tpool->add(temp0, temp1);
                     }
@@ -512,7 +512,7 @@ int main() {
     memcpy(networkgs2, network2, 1240);
 
     batchSize = 50;
-    tpool->init(10);//BatchSize must be a positive integer multiple of the number of threads
+    std::vector<std::thread> threads = tpool->init(10);//BatchSize must be a positive integer multiple of the number of threads
 
     rate = 0.003;//Learning Rate
     aim = 1;//Aiming Loss(MSE in total)
@@ -532,4 +532,8 @@ int main() {
 
     std::cout << "Ready..." << std::endl;
     train(rate, aim);
+
+    for (int i = 0; i < threads.size(); i++) {
+        threads[i].detach();
+    }
 }
