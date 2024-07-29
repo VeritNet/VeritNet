@@ -397,7 +397,7 @@ inline void trainNet(int TId/*Thread Id*/) {
         //Init todoList
         networkg2_todoList[0] = false;
         networkg1_todoList[0] = false;
-        for (i = 0; i < 4; i++) {
+        for (i = 0; i < 8; i++) {
             networkg0_todoList[i] = false;
         }
 
