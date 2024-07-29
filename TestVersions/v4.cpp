@@ -1,6 +1,6 @@
 ﻿/*
 * g++ -O3 -std=c++20 -march=native -funroll-all-loops -mavx2 -o v4.exe v4.cpp
-* Test Version 2024.7.28.4
+* Test Version 2024.7.29.4
 * [128 Elu, 32 Elu, 10 Softmax]
 */
 
@@ -17,7 +17,7 @@
 #include <semaphore>
 #include <immintrin.h>
 
-#include "loadMNIST.h"
+#include "MNIST.h"
 
 
 using namespace std;
@@ -33,17 +33,12 @@ public:
     vector/*Threads*/< vector<vector<float>> > TData1;//Label
     int TSize;//Num of threads
     std::vector<std::thread> init(int size);//Create & Detach
-    inline void add(vector<vector<float>>& inputDt0, vector<vector<float>>& inputDt1) {//Add Task
+    inline void add() {//Add Task
         bool noBreak = true;
         while (noBreak) {
             for (int i = 0; i < TSize; i++) {//Find a Free Thread
                 if (TFree[i].load()) {
                     TFree[i].store(false);
-                    mtx.lock();
-                    //Give Task
-                    TData0[i] = inputDt0;
-                    TData1[i] = inputDt1;
-                    mtx.unlock();
                     //TGate[i].store(true);//Wake
                     TGate[i]->release();
                     noBreak = false;
@@ -71,9 +66,11 @@ std::vector<std::mutex> networkgs1_mtx(1);
 std::vector<std::mutex> networkgs2_mtx(1);
 bool gate;//Main Thread Gate
 int reportI = 0;
+int BId = 0;//Batch Id
 float rate, aim, err;//Learning Rate, MSE aim, Cost of 1 Epoch
 inline void trainNet(int TId/*Thread Id*/) {
     tpool->TGate[TId] = new std::counting_semaphore<1>(0);
+    int thisDtId;
 
     //Network Gradients (Thread Memory)
     float(*networkg0)[784 + 1] = new float[128][784 + 1]{};
@@ -107,7 +104,8 @@ inline void trainNet(int TId/*Thread Id*/) {
 
     for (;;) {
         tpool->TGate[TId]->acquire();
-        for (dtIndex = tpool->TData0[TId].size() - 1; dtIndex >= 0; dtIndex--) {//Train all data in this task
+        for (dtIndex = batchSize / tpool->TSize - 1; dtIndex >= 0; dtIndex--) {//Train all data in this task
+            thisDtId = (batchSize * BId) + (TId * (batchSize / tpool->TSize)) + dtIndex;
             //Feed Forward
             //Input Layer - Hidden Layer 0
             for (p = 0; p < 128; p++) {
@@ -115,21 +113,21 @@ inline void trainNet(int TId/*Thread Id*/) {
                 i = 0;
                 for (; i <= 784 - 64; i += 64) {
                     _mm_prefetch((const char*)(network0[p] + i + 64), _MM_HINT_T0);
-                    _mm_prefetch((const char*)(tpool->TData0[TId][dtIndex].data() + i + 64), _MM_HINT_T0);
-                    sum = _mm256_fmadd_ps(_mm256_loadu_ps(network0[p] + i), _mm256_loadu_ps(tpool->TData0[TId][dtIndex].data() + i), sum);
-                    sum = _mm256_fmadd_ps(_mm256_loadu_ps(network0[p] + i + 8), _mm256_loadu_ps(tpool->TData0[TId][dtIndex].data() + i + 8), sum);
-                    sum = _mm256_fmadd_ps(_mm256_loadu_ps(network0[p] + i + 16), _mm256_loadu_ps(tpool->TData0[TId][dtIndex].data() + i + 16), sum);
-                    sum = _mm256_fmadd_ps(_mm256_loadu_ps(network0[p] + i + 24), _mm256_loadu_ps(tpool->TData0[TId][dtIndex].data() + i + 24), sum);
-                    sum = _mm256_fmadd_ps(_mm256_loadu_ps(network0[p] + i + 32), _mm256_loadu_ps(tpool->TData0[TId][dtIndex].data() + i + 32), sum);
-                    sum = _mm256_fmadd_ps(_mm256_loadu_ps(network0[p] + i + 40), _mm256_loadu_ps(tpool->TData0[TId][dtIndex].data() + i + 40), sum);
-                    sum = _mm256_fmadd_ps(_mm256_loadu_ps(network0[p] + i + 48), _mm256_loadu_ps(tpool->TData0[TId][dtIndex].data() + i + 48), sum);
-                    sum = _mm256_fmadd_ps(_mm256_loadu_ps(network0[p] + i + 56), _mm256_loadu_ps(tpool->TData0[TId][dtIndex].data() + i + 56), sum);
+                    _mm_prefetch((const char*)(train_image[thisDtId] + i + 64), _MM_HINT_T0);
+                    sum = _mm256_fmadd_ps(_mm256_loadu_ps(network0[p] + i), _mm256_loadu_ps(train_image[thisDtId] + i), sum);
+                    sum = _mm256_fmadd_ps(_mm256_loadu_ps(network0[p] + i + 8), _mm256_loadu_ps(train_image[thisDtId] + i + 8), sum);
+                    sum = _mm256_fmadd_ps(_mm256_loadu_ps(network0[p] + i + 16), _mm256_loadu_ps(train_image[thisDtId] + i + 16), sum);
+                    sum = _mm256_fmadd_ps(_mm256_loadu_ps(network0[p] + i + 24), _mm256_loadu_ps(train_image[thisDtId] + i + 24), sum);
+                    sum = _mm256_fmadd_ps(_mm256_loadu_ps(network0[p] + i + 32), _mm256_loadu_ps(train_image[thisDtId] + i + 32), sum);
+                    sum = _mm256_fmadd_ps(_mm256_loadu_ps(network0[p] + i + 40), _mm256_loadu_ps(train_image[thisDtId] + i + 40), sum);
+                    sum = _mm256_fmadd_ps(_mm256_loadu_ps(network0[p] + i + 48), _mm256_loadu_ps(train_image[thisDtId] + i + 48), sum);
+                    sum = _mm256_fmadd_ps(_mm256_loadu_ps(network0[p] + i + 56), _mm256_loadu_ps(train_image[thisDtId] + i + 56), sum);
                 }
                 for (; i <= 784 - 16; i += 16) {
                     _mm_prefetch((const char*)(network0[p] + i + 16), _MM_HINT_T0);
-                    _mm_prefetch((const char*)(tpool->TData0[TId][dtIndex].data() + i + 16), _MM_HINT_T0);
-                    sum = _mm256_fmadd_ps(_mm256_loadu_ps(network0[p] + i), _mm256_loadu_ps(tpool->TData0[TId][dtIndex].data() + i), sum);
-                    sum = _mm256_fmadd_ps(_mm256_loadu_ps(network0[p] + i + 8), _mm256_loadu_ps(tpool->TData0[TId][dtIndex].data() + i + 8), sum);
+                    _mm_prefetch((const char*)(train_image[thisDtId] + i + 16), _MM_HINT_T0);
+                    sum = _mm256_fmadd_ps(_mm256_loadu_ps(network0[p] + i), _mm256_loadu_ps(train_image[thisDtId] + i), sum);
+                    sum = _mm256_fmadd_ps(_mm256_loadu_ps(network0[p] + i + 8), _mm256_loadu_ps(train_image[thisDtId] + i + 8), sum);
                 }
                 sum_high = _mm256_extractf128_ps(sum, 1);
                 sum_low = _mm256_extractf128_ps(sum, 0);
@@ -216,13 +214,13 @@ inline void trainNet(int TId/*Thread Id*/) {
 
             //Loss
             for (p = 0; p < 10; p++) {
-                MSError += ((tpool->TData1[TId][dtIndex][p] - networkn2[p]) * (tpool->TData1[TId][dtIndex][p] - networkn2[p]));
+                MSError += ((train_label[thisDtId][p] - networkn2[p]) * (train_label[thisDtId][p] - networkn2[p]));
             }
 
             //Back Propagation
             //Output Layer - Hidden Layer 2
             for (p = 0; p < 10; p++) {
-                networkg2_neuron[p] = -rate * (networkn2[p] - tpool->TData1[TId][dtIndex][p]);
+                networkg2_neuron[p] = -rate * (networkn2[p] - train_label[thisDtId][p]);
                 networkg2[p][32] += networkg2_neuron[p];
                 i = 0;
                 factor = _mm256_set1_ps(networkg2_neuron[p]);
@@ -284,21 +282,21 @@ inline void trainNet(int TId/*Thread Id*/) {
                 factor = _mm256_set1_ps(networkg0_neuron[p]);
                 for (; i <= 784 - 64; i += 64) {
                     _mm_prefetch((const char*)(networkn0 + i + 64), _MM_HINT_T0);
-                    _mm_prefetch((const char*)(tpool->TData0[TId][dtIndex].data() + i + 64), _MM_HINT_T0);
-                    _mm256_storeu_ps(networkg0[p] + i, _mm256_fmadd_ps(factor, _mm256_loadu_ps(tpool->TData0[TId][dtIndex].data() + i), _mm256_loadu_ps(networkg0[p] + i)));
-                    _mm256_storeu_ps(networkg0[p] + i + 8, _mm256_fmadd_ps(factor, _mm256_loadu_ps(tpool->TData0[TId][dtIndex].data() + i + 8), _mm256_loadu_ps(networkg0[p] + i + 8)));
-                    _mm256_storeu_ps(networkg0[p] + i + 16, _mm256_fmadd_ps(factor, _mm256_loadu_ps(tpool->TData0[TId][dtIndex].data() + i + 16), _mm256_loadu_ps(networkg0[p] + i + 16)));
-                    _mm256_storeu_ps(networkg0[p] + i + 24, _mm256_fmadd_ps(factor, _mm256_loadu_ps(tpool->TData0[TId][dtIndex].data() + i + 24), _mm256_loadu_ps(networkg0[p] + i + 24)));
-                    _mm256_storeu_ps(networkg0[p] + i + 32, _mm256_fmadd_ps(factor, _mm256_loadu_ps(tpool->TData0[TId][dtIndex].data() + i + 32), _mm256_loadu_ps(networkg0[p] + i + 32)));
-                    _mm256_storeu_ps(networkg0[p] + i + 40, _mm256_fmadd_ps(factor, _mm256_loadu_ps(tpool->TData0[TId][dtIndex].data() + i + 40), _mm256_loadu_ps(networkg0[p] + i + 40)));
-                    _mm256_storeu_ps(networkg0[p] + i + 48, _mm256_fmadd_ps(factor, _mm256_loadu_ps(tpool->TData0[TId][dtIndex].data() + i + 48), _mm256_loadu_ps(networkg0[p] + i + 48)));
-                    _mm256_storeu_ps(networkg0[p] + i + 56, _mm256_fmadd_ps(factor, _mm256_loadu_ps(tpool->TData0[TId][dtIndex].data() + i + 56), _mm256_loadu_ps(networkg0[p] + i + 56)));
+                    _mm_prefetch((const char*)(train_image[thisDtId] + i + 64), _MM_HINT_T0);
+                    _mm256_storeu_ps(networkg0[p] + i, _mm256_fmadd_ps(factor, _mm256_loadu_ps(train_image[thisDtId] + i), _mm256_loadu_ps(networkg0[p] + i)));
+                    _mm256_storeu_ps(networkg0[p] + i + 8, _mm256_fmadd_ps(factor, _mm256_loadu_ps(train_image[thisDtId] + i + 8), _mm256_loadu_ps(networkg0[p] + i + 8)));
+                    _mm256_storeu_ps(networkg0[p] + i + 16, _mm256_fmadd_ps(factor, _mm256_loadu_ps(train_image[thisDtId] + i + 16), _mm256_loadu_ps(networkg0[p] + i + 16)));
+                    _mm256_storeu_ps(networkg0[p] + i + 24, _mm256_fmadd_ps(factor, _mm256_loadu_ps(train_image[thisDtId] + i + 24), _mm256_loadu_ps(networkg0[p] + i + 24)));
+                    _mm256_storeu_ps(networkg0[p] + i + 32, _mm256_fmadd_ps(factor, _mm256_loadu_ps(train_image[thisDtId] + i + 32), _mm256_loadu_ps(networkg0[p] + i + 32)));
+                    _mm256_storeu_ps(networkg0[p] + i + 40, _mm256_fmadd_ps(factor, _mm256_loadu_ps(train_image[thisDtId] + i + 40), _mm256_loadu_ps(networkg0[p] + i + 40)));
+                    _mm256_storeu_ps(networkg0[p] + i + 48, _mm256_fmadd_ps(factor, _mm256_loadu_ps(train_image[thisDtId] + i + 48), _mm256_loadu_ps(networkg0[p] + i + 48)));
+                    _mm256_storeu_ps(networkg0[p] + i + 56, _mm256_fmadd_ps(factor, _mm256_loadu_ps(train_image[thisDtId] + i + 56), _mm256_loadu_ps(networkg0[p] + i + 56)));
                 }
                 for (; i <= 784 - 16; i += 16) {
                     _mm_prefetch((const char*)(networkn0 + i + 16), _MM_HINT_T0);
-                    _mm_prefetch((const char*)(tpool->TData0[TId][dtIndex].data() + i + 16), _MM_HINT_T0);
-                    _mm256_storeu_ps(networkg0[p] + i, _mm256_fmadd_ps(factor, _mm256_loadu_ps(tpool->TData0[TId][dtIndex].data() + i), _mm256_loadu_ps(networkg0[p] + i)));
-                    _mm256_storeu_ps(networkg0[p] + i + 8, _mm256_fmadd_ps(factor, _mm256_loadu_ps(tpool->TData0[TId][dtIndex].data() + i + 8), _mm256_loadu_ps(networkg0[p] + i + 8)));
+                    _mm_prefetch((const char*)(train_image[thisDtId] + i + 16), _MM_HINT_T0);
+                    _mm256_storeu_ps(networkg0[p] + i, _mm256_fmadd_ps(factor, _mm256_loadu_ps(train_image[thisDtId] + i), _mm256_loadu_ps(networkg0[p] + i)));
+                    _mm256_storeu_ps(networkg0[p] + i + 8, _mm256_fmadd_ps(factor, _mm256_loadu_ps(train_image[thisDtId] + i + 8), _mm256_loadu_ps(networkg0[p] + i + 8)));
                 }
                 /*for (; i < 784; ++i) {
                     networkg0[p][i] += networkg0_neuron[p] * tpool->TData0[TId][dtIndex][i];
@@ -456,12 +454,9 @@ void train(float rate, float aim) {
             while (true) {
                 if (gate == true) {
                     gate = false;
+                    BId = c;
                     for (w = 0; w < batchSize; w += batchSize / tpool->TSize) {
-                        for (dti = 0; dti < batchSize / tpool->TSize; dti++) {
-                            temp0[dti] = train_image[static_cast<std::vector<std::vector<float, std::allocator<float>>, std::allocator<std::vector<float, std::allocator<float>>>>::size_type>(batchSize) * c + w + dti];
-                            temp1[dti] = train_label[static_cast<std::vector<std::vector<float, std::allocator<float>>, std::allocator<std::vector<float, std::allocator<float>>>>::size_type>(batchSize) * c + w + dti];
-                        }
-                        tpool->add(temp0, temp1);
+                        tpool->add();
                     }
                     break;
                 }
@@ -526,7 +521,7 @@ int main() {
     read_Mnist_Images(train_image_name, train_feature_vector, dts);
     convert_array_image(train_feature_vector);
     vector<int> train_labels;
-    read_Mnist_Label(train_label_name, train_labels);
+    read_Mnist_Label(train_label_name, train_labels, dts);
     std::cout << "3/3 Convert Training Data" << endl;
     convert_array_label(train_labels);
 
