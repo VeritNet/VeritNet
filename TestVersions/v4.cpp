@@ -281,7 +281,7 @@ inline void trainNet(int TId/*Thread Id*/) {
                 i = 0;
                 factor = _mm256_set1_ps(networkg0_neuron[p]);
                 for (; i <= 784 - 64; i += 64) {
-                    _mm_prefetch((const char*)(networkn0 + i + 64), _MM_HINT_T0);
+                    _mm_prefetch((const char*)(networkg0[p] + i + 64), _MM_HINT_T0);
                     _mm_prefetch((const char*)(train_image[thisDtId] + i + 64), _MM_HINT_T0);
                     _mm256_storeu_ps(networkg0[p] + i, _mm256_fmadd_ps(factor, _mm256_loadu_ps(train_image[thisDtId] + i), _mm256_loadu_ps(networkg0[p] + i)));
                     _mm256_storeu_ps(networkg0[p] + i + 8, _mm256_fmadd_ps(factor, _mm256_loadu_ps(train_image[thisDtId] + i + 8), _mm256_loadu_ps(networkg0[p] + i + 8)));
@@ -293,7 +293,7 @@ inline void trainNet(int TId/*Thread Id*/) {
                     _mm256_storeu_ps(networkg0[p] + i + 56, _mm256_fmadd_ps(factor, _mm256_loadu_ps(train_image[thisDtId] + i + 56), _mm256_loadu_ps(networkg0[p] + i + 56)));
                 }
                 for (; i <= 784 - 16; i += 16) {
-                    _mm_prefetch((const char*)(networkn0 + i + 16), _MM_HINT_T0);
+                    _mm_prefetch((const char*)(networkg0[p] + i + 16), _MM_HINT_T0);
                     _mm_prefetch((const char*)(train_image[thisDtId] + i + 16), _MM_HINT_T0);
                     _mm256_storeu_ps(networkg0[p] + i, _mm256_fmadd_ps(factor, _mm256_loadu_ps(train_image[thisDtId] + i), _mm256_loadu_ps(networkg0[p] + i)));
                     _mm256_storeu_ps(networkg0[p] + i + 8, _mm256_fmadd_ps(factor, _mm256_loadu_ps(train_image[thisDtId] + i + 8), _mm256_loadu_ps(networkg0[p] + i + 8)));
@@ -442,7 +442,7 @@ inline std::vector<std::thread> TP::init(int size) {
 
 void train(float rate, float aim) {
     std::cout << "Gradient loss function: Cross Entropy" << std::endl << "------------------------------" << std::endl;
-    int i{}, c, w, dti;
+    int i{}, c, w;
     std::chrono::duration<double> duration;
     vector<vector<float>> temp0(batchSize / tpool->TSize);
     vector<vector<float>> temp1(batchSize / tpool->TSize);
