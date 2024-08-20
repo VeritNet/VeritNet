@@ -1,7 +1,7 @@
 ﻿/*
 * The codes are generated with Blueprint By VeritNet Engine, using AVX2, so I manually added comments and modified some variable names to make the codes easier to read.
 * g++ -O3 -std=c++20 -march=native -funroll-all-loops -mavx2 -o v5.exe v5.cpp
-* Version 2024.8.16.5
+* Version 2024.8.20.5
 * [128 Elu, 32 Elu, 10 Softmax]
 */
 
@@ -602,6 +602,7 @@ inline void trainNet(int TId/*Thread Id*/) {
                                 : "memory", "ymm0", "ymm1", "ymm2", "ymm3"
                             );
                         }
+                        networkgs0_bi += networkg0_bi;
                         networkgs0_mtx[mtx_index_0].unlock();
                         networkg0_todoList[mtx_index_0] = true;
                     }
