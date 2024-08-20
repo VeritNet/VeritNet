@@ -602,7 +602,6 @@ inline void trainNet(int TId/*Thread Id*/) {
                                 : "memory", "ymm0", "ymm1", "ymm2", "ymm3"
                             );
                         }
-                        networkgs0_bi += networkg0_bi;
                         networkgs0_mtx[mtx_index_0].unlock();
                         networkg0_todoList[mtx_index_0] = true;
                     }
