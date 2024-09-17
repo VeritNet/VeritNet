@@ -257,14 +257,14 @@ inline void trainNet(int TId/*Thread Id*/) {
             networkb2[9] += network2_bi[9];
 
             //Hidden Layer 2 - Output Layer
-            SSum = 0;
+            /*SSum = 0;
             for (i = 0; i < 10; i++) {
                 SSum += exp(networkb2[i]);
             }
             for (i = 0; i < 10; i++) {
                 networkn2[i] += exp(networkb2[i]) / SSum;
-            }
-            /*
+            }*/
+            
             SSum = 0;
             exp_temp = _mm256_min_ps(_mm256_load_ps(networkb2), EXP_HI);
             exp_temp = _mm256_max_ps(exp_temp, EXP_LO);
@@ -296,7 +296,7 @@ inline void trainNet(int TId/*Thread Id*/) {
             _mm256_store_ps(networkn2, _mm256_div_ps(exp_temp, factor));
             networkn2[8] = exp(networkb2[8]) / SSum;
             networkn2[9] = exp(networkb2[9]) / SSum;
-            */
+            
             
             //Loss
             for (p = 0; p < 10; p++) {
@@ -541,7 +541,7 @@ inline void trainNet(int TId/*Thread Id*/) {
                             : "memory", "ymm0", "ymm1", "ymm2", "ymm3", "ymm4", "ymm5", "ymm6", "ymm7"
                         );
                     }
-                    _mm256_store_ps(networkgs2_bi, _mm256_add_ps(_mm256_load_ps(networkgs2_bi), _mm256_load_ps(networkg2_bi)));
+                    _mm256_storeu_ps(networkgs2_bi, _mm256_add_ps(_mm256_loadu_ps(networkgs2_bi), _mm256_loadu_ps(networkg2_bi)));
                     networkgs2_bi[8] += networkg2_bi[8];
                     networkgs2_bi[9] += networkg2_bi[9];
                     networkgs2_mtx[mtx_index_2].unlock();
@@ -600,10 +600,10 @@ inline void trainNet(int TId/*Thread Id*/) {
                             );
                         }
                     }
-                    _mm256_store_ps(networkgs1_bi + p, _mm256_add_ps(_mm256_load_ps(networkgs1_bi + p), _mm256_load_ps(networkg1_bi + p)));
-                    _mm256_store_ps(networkgs1_bi + p + 8, _mm256_add_ps(_mm256_load_ps(networkgs1_bi + p + 8), _mm256_load_ps(networkg1_bi + p + 8)));
-                    _mm256_store_ps(networkgs1_bi + p + 16, _mm256_add_ps(_mm256_load_ps(networkgs1_bi + p + 16), _mm256_load_ps(networkg1_bi + p + 16)));
-                    _mm256_store_ps(networkgs1_bi + p + 24, _mm256_add_ps(_mm256_load_ps(networkgs1_bi + p + 24), _mm256_load_ps(networkg1_bi + p + 24)));
+                    _mm256_storeu_ps(networkgs1_bi + p, _mm256_add_ps(_mm256_loadu_ps(networkgs1_bi + p), _mm256_loadu_ps(networkg1_bi + p)));
+                    _mm256_storeu_ps(networkgs1_bi + p + 8, _mm256_add_ps(_mm256_loadu_ps(networkgs1_bi + p + 8), _mm256_loadu_ps(networkg1_bi + p + 8)));
+                    _mm256_storeu_ps(networkgs1_bi + p + 16, _mm256_add_ps(_mm256_loadu_ps(networkgs1_bi + p + 16), _mm256_loadu_ps(networkg1_bi + p + 16)));
+                    _mm256_storeu_ps(networkgs1_bi + p + 24, _mm256_add_ps(_mm256_loadu_ps(networkgs1_bi + p + 24), _mm256_loadu_ps(networkg1_bi + p + 24)));
                     networkgs1_mtx[mtx_index_1].unlock();
                     networkg1_todoList[mtx_index_1] = true;
                 }
@@ -611,19 +611,19 @@ inline void trainNet(int TId/*Thread Id*/) {
             for (mtx_index_0 = 0; mtx_index_0 < 8; mtx_index_0++) {
                 if (!networkg0_todoList[mtx_index_0]) {
                     if (networkgs0_mtx[mtx_index_0].try_lock()) {
-                        if(mtx_index_0 == 7){
+                        if (mtx_index_0 == 7) {
                             for (p = 0; p <= 128 - 64; p += 64) {
-                                _mm256_store_ps(networkgs0_bi + p, _mm256_add_ps(_mm256_load_ps(networkgs0_bi + p), _mm256_load_ps(networkg0_bi + p)));
-                                _mm256_store_ps(networkgs0_bi + p + 8, _mm256_add_ps(_mm256_load_ps(networkgs0_bi + p + 8), _mm256_load_ps(networkg0_bi + p + 8)));
-                                _mm256_store_ps(networkgs0_bi + p + 16, _mm256_add_ps(_mm256_load_ps(networkgs0_bi + p + 16), _mm256_load_ps(networkg0_bi + p + 16)));
-                                _mm256_store_ps(networkgs0_bi + p + 24, _mm256_add_ps(_mm256_load_ps(networkgs0_bi + p + 24), _mm256_load_ps(networkg0_bi + p + 24)));
-                                _mm256_store_ps(networkgs0_bi + p + 32, _mm256_add_ps(_mm256_load_ps(networkgs0_bi + p + 32), _mm256_load_ps(networkg0_bi + p + 32)));
-                                _mm256_store_ps(networkgs0_bi + p + 40, _mm256_add_ps(_mm256_load_ps(networkgs0_bi + p + 40), _mm256_load_ps(networkg0_bi + p + 40)));
-                                _mm256_store_ps(networkgs0_bi + p + 48, _mm256_add_ps(_mm256_load_ps(networkgs0_bi + p + 48), _mm256_load_ps(networkg0_bi + p + 48)));
-                                _mm256_store_ps(networkgs0_bi + p + 56, _mm256_add_ps(_mm256_load_ps(networkgs0_bi + p + 56), _mm256_load_ps(networkg0_bi + p + 56)));
+                                _mm256_storeu_ps(networkgs0_bi + p, _mm256_add_ps(_mm256_loadu_ps(networkgs0_bi + p), _mm256_loadu_ps(networkg0_bi + p)));
+                                _mm256_storeu_ps(networkgs0_bi + p + 8, _mm256_add_ps(_mm256_loadu_ps(networkgs0_bi + p + 8), _mm256_loadu_ps(networkg0_bi + p + 8)));
+                                _mm256_storeu_ps(networkgs0_bi + p + 16, _mm256_add_ps(_mm256_loadu_ps(networkgs0_bi + p + 16), _mm256_loadu_ps(networkg0_bi + p + 16)));
+                                _mm256_storeu_ps(networkgs0_bi + p + 24, _mm256_add_ps(_mm256_loadu_ps(networkgs0_bi + p + 24), _mm256_loadu_ps(networkg0_bi + p + 24)));
+                                _mm256_storeu_ps(networkgs0_bi + p + 32, _mm256_add_ps(_mm256_loadu_ps(networkgs0_bi + p + 32), _mm256_loadu_ps(networkg0_bi + p + 32)));
+                                _mm256_storeu_ps(networkgs0_bi + p + 40, _mm256_add_ps(_mm256_loadu_ps(networkgs0_bi + p + 40), _mm256_loadu_ps(networkg0_bi + p + 40)));
+                                _mm256_storeu_ps(networkgs0_bi + p + 48, _mm256_add_ps(_mm256_loadu_ps(networkgs0_bi + p + 48), _mm256_loadu_ps(networkg0_bi + p + 48)));
+                                _mm256_storeu_ps(networkgs0_bi + p + 56, _mm256_add_ps(_mm256_loadu_ps(networkgs0_bi + p + 56), _mm256_loadu_ps(networkg0_bi + p + 56)));
                             }
                         }
-                        _mm_prefetch((const char*)(networkg0), _MM_HINT_T0);
+                        _mm_prefetch((const char*)(networkg0 + (12544 * mtx_index_0)), _MM_HINT_T0);
                         for (p = 0; p < 16; p++) {
                             for (i = 0; i <= 784 - 64; i += 64) {
                                 __asm__ volatile (
@@ -840,20 +840,20 @@ int main() {
     memcpy(networkgs2_bi, network2_bi, 40);
 
     //Method 2: Load Model from bin
-    std::ifstream infile("network_data.bin", std::ios::binary);
+    /*std::ifstream infile("network_data.bin", std::ios::binary);
     if (infile.is_open()) {
         infile.read(reinterpret_cast<char*>(network0), 128 * 785 * sizeof(float));
         infile.read(reinterpret_cast<char*>(network1), 32 * 129 * sizeof(float));
         infile.read(reinterpret_cast<char*>(network2), 10 * 33 * sizeof(float));
-        infile.read(reinterpret_cast<char*>(&network0_bi), sizeof(float));
-        infile.read(reinterpret_cast<char*>(&network1_bi), sizeof(float));
-        infile.read(reinterpret_cast<char*>(&network2_bi), sizeof(float));
+        infile.read(reinterpret_cast<char*>(network0_bi), 128 * sizeof(float));
+        infile.read(reinterpret_cast<char*>(network1_bi), 32 * sizeof(float));
+        infile.read(reinterpret_cast<char*>(network2_bi), 10 * sizeof(float));
         infile.close();
         std::cout << "Model Loaded\n";
     } else {
         std::cerr << "Failed to load model\n";
         return 1;
-    }
+    }*/
 
     batchSize = 50;
     std::vector<std::thread> threads = tpool->init(10);//BatchSize must be a positive integer multiple of the number of threads
@@ -880,4 +880,20 @@ int main() {
     for (int i = 0; i < threads.size(); i++) {
         threads[i].detach();
     }
+
+
+    //Save the model
+    /*std::ofstream outfile("network_data.bin", std::ios::binary);
+    if (outfile.is_open()) {
+        outfile.write(reinterpret_cast<char*>(network0), 128 * 785 * sizeof(float));
+        outfile.write(reinterpret_cast<char*>(network1), 32 * 129 * sizeof(float));
+        outfile.write(reinterpret_cast<char*>(network2), 10 * 33 * sizeof(float));
+        outfile.write(reinterpret_cast<char*>(network0_bi), 128 * sizeof(float));
+        outfile.write(reinterpret_cast<char*>(network1_bi), 32 * sizeof(float));
+        outfile.write(reinterpret_cast<char*>(network2_bi), 10 * sizeof(float));
+        outfile.close();
+        std::cout << "Network Model Data Saved\n";
+    } else {
+        std::cerr << "Failed to save model\n";
+    }*/
 }
