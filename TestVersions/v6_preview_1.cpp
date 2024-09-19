@@ -1,7 +1,7 @@
 ﻿/*
 * The codes are generated with Blueprint By VeritNet Engine, using AVX2, so I manually added comments and modified some variable names to make the codes easier to read.
-* g++ -O3 -std=c++20 -march=native -funroll-all-loops -mavx2 -o v6_preview_0.exe v6_preview_0.cpp
-* Version 2024.9.17.6.0
+* g++ -O3 -std=c++20 -march=native -funroll-all-loops -mavx2 -o v6_preview_1.exe v6_preview_1.cpp
+* Version 2024.9.19.6.1
 * [128 Elu, 32 Elu, 10 Softmax]
 */
 
@@ -222,10 +222,10 @@ inline void trainNet(int TId/*Thread Id*/) {
                 sum_low = _mm_hadd_ps(sum_low, sum_low);
                 networkb1[p] = _mm_cvtss_f32(sum_low);
             }
-            _mm256_store_ps(networkb1 + p, _mm256_add_ps(_mm256_load_ps(networkb1 + p), _mm256_load_ps(network1_bi + p)));
-            _mm256_store_ps(networkb1 + p + 8, _mm256_add_ps(_mm256_load_ps(networkb1 + p + 8), _mm256_load_ps(network1_bi + p + 8)));
-            _mm256_store_ps(networkb1 + p + 16, _mm256_add_ps(_mm256_load_ps(networkb1 + p + 16), _mm256_load_ps(network1_bi + p + 16)));
-            _mm256_store_ps(networkb1 + p + 24, _mm256_add_ps(_mm256_load_ps(networkb1 + p + 24), _mm256_load_ps(network1_bi + p + 24)));
+            _mm256_store_ps(networkb1, _mm256_add_ps(_mm256_load_ps(networkb1), _mm256_load_ps(network1_bi)));
+            _mm256_store_ps(networkb1 + 8, _mm256_add_ps(_mm256_load_ps(networkb1 + 8), _mm256_load_ps(network1_bi + 8)));
+            _mm256_store_ps(networkb1 + 16, _mm256_add_ps(_mm256_load_ps(networkb1 + 16), _mm256_load_ps(network1_bi + 16)));
+            _mm256_store_ps(networkb1 + 24, _mm256_add_ps(_mm256_load_ps(networkb1 + 24), _mm256_load_ps(network1_bi + 24)));
             for (p = 0; p < 32; p++) {
                 if (networkb1[p] >= 0) {
                     networkn1[p] = networkb1[p];
@@ -349,12 +349,10 @@ inline void trainNet(int TId/*Thread Id*/) {
                 for (q = 0; q < 10; q++) {
                     networkg1_neuron[p] += networkg2_neuron[q] * network2[(q * 32) + p];
                 }
-                if (networkb1[p] >= 0) {
-                    networkg1_bi[p] = networkg1_neuron[p];
-                } else {
+                if (networkb1[p] < 0) {
                     networkg1_neuron[p] *= exp(networkb1[p]);
-                    networkg1_bi[p] = networkg1_neuron[p];
                 }
+                networkg1_bi[p] += networkg1_neuron[p];
                 _mm_prefetch((const char*)(networkg1 + (p * 128)), _MM_HINT_T0);
                 factor = _mm256_set1_ps(networkg1_neuron[p]);
                 for (i = 0; i <= 128 - 56; i += 56) {
@@ -435,12 +433,10 @@ inline void trainNet(int TId/*Thread Id*/) {
                 for (q = 0; q < 32; q++) {
                     networkg0_neuron[p] += networkg1_neuron[q] * network1[(q * 128) + p];
                 }
-                if (networkb0[p] >= 0) {
-                    networkg0_bi[p] = networkg0_neuron[p];
-                } else {
+                if (networkb0[p] < 0) {
                     networkg0_neuron[p] *= exp(networkb0[p]);
-                    networkg0_bi[p] = networkg0_neuron[p];
                 }
+                networkg0_bi[p] += networkg0_neuron[p];
                 _mm_prefetch((const char*)(networkg0 + (p * 784)), _MM_HINT_T0);
                 factor = _mm256_set1_ps(networkg0_neuron[p]);
                 for (i = 0; i <= 784 - 56; i += 56) {
@@ -600,10 +596,10 @@ inline void trainNet(int TId/*Thread Id*/) {
                             );
                         }
                     }
-                    _mm256_storeu_ps(networkgs1_bi + p, _mm256_add_ps(_mm256_loadu_ps(networkgs1_bi + p), _mm256_loadu_ps(networkg1_bi + p)));
-                    _mm256_storeu_ps(networkgs1_bi + p + 8, _mm256_add_ps(_mm256_loadu_ps(networkgs1_bi + p + 8), _mm256_loadu_ps(networkg1_bi + p + 8)));
-                    _mm256_storeu_ps(networkgs1_bi + p + 16, _mm256_add_ps(_mm256_loadu_ps(networkgs1_bi + p + 16), _mm256_loadu_ps(networkg1_bi + p + 16)));
-                    _mm256_storeu_ps(networkgs1_bi + p + 24, _mm256_add_ps(_mm256_loadu_ps(networkgs1_bi + p + 24), _mm256_loadu_ps(networkg1_bi + p + 24)));
+                    _mm256_storeu_ps(networkgs1_bi, _mm256_add_ps(_mm256_loadu_ps(networkgs1_bi), _mm256_loadu_ps(networkg1_bi)));
+                    _mm256_storeu_ps(networkgs1_bi + 8, _mm256_add_ps(_mm256_loadu_ps(networkgs1_bi + 8), _mm256_loadu_ps(networkg1_bi + 8)));
+                    _mm256_storeu_ps(networkgs1_bi + 16, _mm256_add_ps(_mm256_loadu_ps(networkgs1_bi + 16), _mm256_loadu_ps(networkg1_bi + 16)));
+                    _mm256_storeu_ps(networkgs1_bi + 24, _mm256_add_ps(_mm256_loadu_ps(networkgs1_bi + 24), _mm256_loadu_ps(networkg1_bi + 24)));
                     networkgs1_mtx[mtx_index_1].unlock();
                     networkg1_todoList[mtx_index_1] = true;
                 }
@@ -710,13 +706,13 @@ inline void trainNet(int TId/*Thread Id*/) {
         //Clear Temp
         _mm_prefetch((const char*)(networkg0), _MM_HINT_T0);
         std::fill(networkg0, networkg0 + 100352, 0);
-        std::fill(networkg0_bi, networkg0_bi + 128, 0);
+        //std::fill(networkg0_bi, networkg0_bi + 128, 0);
         _mm_prefetch((const char*)(networkg1), _MM_HINT_T0);
         std::fill(networkg1, networkg1 + 4096, 0);
-        std::fill(networkg1_bi, networkg1_bi + 32, 0);
+        //std::fill(networkg1_bi, networkg1_bi + 32, 0);
         _mm_prefetch((const char*)(networkg2), _MM_HINT_T0);
         std::fill(networkg2, networkg2 + 320, 0);
-        std::fill(networkg2_bi, networkg2_bi + 10, 0);
+        //std::fill(networkg2_bi, networkg2_bi + 10, 0);
 
         mtx.lock();
         MSETotal += MSError;//Add Lost to Global Cost of this Batch
@@ -725,13 +721,13 @@ inline void trainNet(int TId/*Thread Id*/) {
             //Update Weights & Bias
             _mm_prefetch((const char*)(networkg0), _MM_HINT_T0);
             memcpy(network0, networkgs0, 401408);
-            memcpy(network0_bi, networkgs0_bi, 512);
+            //memcpy(network0_bi, networkgs0_bi, 512);
             _mm_prefetch((const char*)(networkg1), _MM_HINT_T0);
             memcpy(network1, networkgs1, 16384);
-            memcpy(network1_bi, networkgs1_bi, 128);
+            //memcpy(network1_bi, networkgs1_bi, 128);
             _mm_prefetch((const char*)(networkg2), _MM_HINT_T0);
             memcpy(network2, networkgs2, 1280);
-            memcpy(network2_bi, networkgs2_bi, 40);
+            //memcpy(network2_bi, networkgs2_bi, 40);
 
             err += MSETotal;//Add Batch Cost to Epoch Cost
             MSETotal = 0;//Clear temp
