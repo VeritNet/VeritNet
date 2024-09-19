@@ -17,7 +17,6 @@
 #include <atomic>
 #include <semaphore>
 #include <immintrin.h>
-#include <cassert>
 #include "MNIST.h"
 
 
