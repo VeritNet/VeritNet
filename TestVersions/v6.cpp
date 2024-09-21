@@ -136,9 +136,6 @@ inline void trainNet(int TId/*Thread Id*/) {
     std::fill(networkb0, networkb0 + 128, 0);
     std::fill(networkb1, networkb1 + 32, 0);
     std::fill(networkb2, networkb2 + 10, 0);
-    std::fill(networkb0, networkb0 + 128, 0);
-    std::fill(networkb1, networkb1 + 32, 0);
-    std::fill(networkb2, networkb2 + 10, 0);
 
     //The gradient of neurons is equal to the gradient of neuron bias
     float* networkg0_neuron = static_cast<float*>(_mm_malloc(128 * sizeof(float), 32));
