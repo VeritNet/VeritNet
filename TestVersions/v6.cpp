@@ -1,7 +1,7 @@
 ﻿/*
 * The codes are generated with Blueprint By VeritNet Engine, using AVX2, so I manually added comments and modified some variable names to make the codes easier to read.
 * g++ -O3 -std=c++20 -march=native -funroll-all-loops -mavx2 -o v6.exe v6.cpp
-* Version 2024.10.1.6
+* Version 2024.10.2.6
 * [128 Elu, 32 Elu, 10 Softmax]
 */
 
@@ -15,7 +15,6 @@
 #include <deque>
 #include <chrono>
 #include <atomic>
-#include <semaphore>
 #include <immintrin.h>
 #include "MNIST.h"
 
@@ -27,7 +26,7 @@ std::mutex mtx;//Global Mutex Lock
 //Thread Pool
 class TP {
 public:
-    vector<std::counting_semaphore<1>*> TGate;//Wake Conditon
+    vector<mutex*> TGate;//Wake Conditon
     deque<atomic<bool>> TFree;//Is Free
     int TSize;//Num of threads
     std::vector<std::thread> init(int size);//Create & Detach
@@ -37,7 +36,7 @@ public:
             for (int i = 0; i < TSize; i++) {//Find a Free Thread
                 if (TFree[i].load()) {
                     TFree[i].store(false);
-                    TGate[i]->release();
+                    TGate[i]->unlock();
                     noBreak = false;
                     break;
                 }
@@ -76,7 +75,8 @@ int reportI = 0;
 int BId = 0;//Batch Id
 float rate, aim, err;//Learning Rate, MSE aim, Cost of 1 Epoch
 inline void trainNet(int TId/*Thread Id*/) {
-    tpool->TGate[TId] = new std::counting_semaphore<1>(0);
+    tpool->TGate[TId] = new mutex;
+    tpool->TGate[TId]->lock();
     int thisDtId;
 
     //Block update of gradients in shared memory
@@ -147,7 +147,7 @@ inline void trainNet(int TId/*Thread Id*/) {
 
 
     for (;;) {
-        tpool->TGate[TId]->acquire();
+        tpool->TGate[TId]->lock();
         for (dtIndex = batchSize / tpool->TSize - 1; dtIndex >= 0; dtIndex--) {//Train all data in this task
             thisDtId = (batchSize * BId) + (TId * (batchSize / tpool->TSize)) + dtIndex;
             //Feed Forward
