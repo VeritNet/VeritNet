@@ -1,7 +1,7 @@
 ﻿/*
 * The codes are generated with Blueprint By VeritNet Engine, using AVX2, so I manually added comments and modified some variable names to make the codes easier to read.
-* g++ -O3 -std=c++20 -march=native -funroll-all-loops -mavx2 -o v6.exe v6.cpp
-* Version 2024.10.2.6
+* g++ -O3 -march=native -funroll-all-loops -mavx2 -o v6.exe v6.cpp
+* Version 2024.10.7.6
 * [128 Elu, 32 Elu, 10 Softmax]
 */
 
@@ -404,30 +404,6 @@ inline void trainNet(int TId/*Thread Id*/) {
                         : // No output operands
                         : "r" (networkn0 + i), "r" (networkg1 + (p * 128) + i), "x" (factor)
                         : "memory", "ymm0", "ymm1", "ymm2", "ymm3", "ymm4", "ymm5", "ymm6", "ymm7", "ymm8", "ymm9", "ymm10", "ymm11", "ymm12", "ymm13", "ymm14"
-                    );
-                    __asm__ volatile (
-                        // Load 2 ymm registers from a
-                        "vmovaps (%0), %%ymm0\n"
-                        "vmovaps 0x20(%0), %%ymm1\n"
-
-                        // Load 2 ymm registers from b
-                        "vmovaps (%1), %%ymm2\n"
-                        "vmovaps 0x20(%1), %%ymm3\n"
-
-                        // Load factor_vec into ymm15
-                        "vmovaps %2, %%ymm15\n"
-
-                        // Multiply a by factor and add to b using vfmadd231ps
-                        "vfmadd231ps %%ymm15, %%ymm0, %%ymm2\n"
-                        "vfmadd231ps %%ymm15, %%ymm1, %%ymm3\n"
-
-                        // Store results back to b
-                        "vmovaps %%ymm2, (%1)\n"
-                        "vmovaps %%ymm3, 0x20(%1)\n"
-
-                        : // No output operands
-                        : "r" (networkn0 + i), "r" (networkg1 + (p * 128) + i), "x" (factor)
-                        : "memory", "ymm0", "ymm1", "ymm2", "ymm3", "ymm15"
                     );
                 }
                 __asm__ volatile (
