@@ -627,3 +627,191 @@ int main() {
 
     return 0;
 }
+
+
+
+/*
+* （附）卷积核扩展技术：用于当卷积核总浮点宽度不足于SIMD指令要求时
+* 
+*   float(*kernel0_expand)[24 * 4] = new float[4][24 * 4]{ 0 };//24为(4*3)和8的最小公倍数，即(4*3)至少展开多少倍后才能达到8的倍数，除非已经超出输入图像宽度
+    float* temp_row0 = static_cast<float*>(_mm_malloc(32 * 3 * sizeof(float), 32));
+    for (int filterId = 0; filterId < 4; filterId++) {
+        for (int lineId = 0; lineId < 4; lineId++) {
+            memcpy(&kernel0_expand[filterId][24 * lineId], &kernel0[filterId][4 * 3 * lineId], 4 * (4 * 3));
+            memcpy(&kernel0_expand[filterId][24 * lineId + 12], &kernel0[filterId][4 * 3 * lineId], 4 * (4 * 3));
+        }
+    }
+*
+*                   _mm_prefetch((const char*)(train_images[thisDtId] + (96 * p)), _MM_HINT_T0);
+                    //Step 0
+                    for (i = 0; i <= 96 - 24; i += 24) {//展开后的长度（24）能在图像中（96）完整展开填充n次
+                        for (j = 0; j < 24; j += 8) {
+                            _mm256_storeu_ps(temp_row0 + i + j,
+                                _mm256_fmadd_ps(_mm256_loadu_ps(kernel0_expand[0] + 72 + j), _mm256_loadu_ps(train_images[thisDtId] + (96 * (p + 3)) + i + j),//Line 3
+                                    _mm256_fmadd_ps(_mm256_loadu_ps(kernel0_expand[0] + 48 + j), _mm256_loadu_ps(train_images[thisDtId] + (96 * (p + 2)) + i + j),//Line 2
+                                        _mm256_fmadd_ps(_mm256_loadu_ps(kernel0_expand[0] + 24 + j), _mm256_loadu_ps(train_images[thisDtId] + (96 * (p + 1)) + i + j),//Line 1
+                                            _mm256_mul_ps(_mm256_loadu_ps(kernel0_expand[0] + 0 + j), _mm256_loadu_ps(train_images[thisDtId] + (96 * p) + i + j))//Line 0
+                                        )
+                                    )
+                                )
+                            );
+                        }
+                    }
+                    for (j = 0; j <= 96 - 12; j += 12) {
+                        sum4 = _mm_add_ps(
+                            _mm_add_ps(_mm256_extractf128_ps(_mm256_loadu_ps(temp_row0 + j), 0), _mm256_extractf128_ps(_mm256_loadu_ps(temp_row0 + j), 1)),
+                            _mm_loadu_ps(temp_row0 + j + 8)
+                        );
+                        sum4 = _mm_hadd_ps(sum4, sum4);
+                        sum4 = _mm_hadd_ps(sum4, sum4);
+                        featureMap0[0][(30 * p) + (j / 3)] += _mm_cvtss_f32(sum4);
+                    }
+
+                    _mm_prefetch((const char*)(train_images[thisDtId] + (96 * p)), _MM_HINT_T0);
+                    //Step 1
+                    for (i = 3; i <= 96 - 24; i += 24) {
+                        for (j = 0; j < 24; j += 8) {
+                            _mm256_storeu_ps(temp_row0 + i + j,
+                                _mm256_fmadd_ps(_mm256_loadu_ps(kernel0_expand[0] + 72 + j), _mm256_loadu_ps(train_images[thisDtId] + (96 * (p + 3)) + i + j),//Line 3
+                                    _mm256_fmadd_ps(_mm256_loadu_ps(kernel0_expand[0] + 48 + j), _mm256_loadu_ps(train_images[thisDtId] + (96 * (p + 2)) + i + j),//Line 2
+                                        _mm256_fmadd_ps(_mm256_loadu_ps(kernel0_expand[0] + 24 + j), _mm256_loadu_ps(train_images[thisDtId] + (96 * (p + 1)) + i + j),//Line 1
+                                            _mm256_mul_ps(_mm256_loadu_ps(kernel0_expand[0] + 0 + j), _mm256_loadu_ps(train_images[thisDtId] + (96 * p) + i + j))//Line 0
+                                        )
+                                    )
+                                )
+                            );
+                        }
+                    }
+                    //处理剩余不能铺满24的部分，尝试补一个12（即一个卷积核宽）
+                    for (; i <= 96 - 8; i += 8) {
+                        _mm256_storeu_ps(temp_row0 + i,
+                            _mm256_fmadd_ps(_mm256_loadu_ps(kernel0_expand[0] + 72), _mm256_loadu_ps(train_images[thisDtId] + (96 * (p + 3)) + i),//Line 3
+                                _mm256_fmadd_ps(_mm256_loadu_ps(kernel0_expand[0] + 48), _mm256_loadu_ps(train_images[thisDtId] + (96 * (p + 2)) + i),//Line 2
+                                    _mm256_fmadd_ps(_mm256_loadu_ps(kernel0_expand[0] + 24), _mm256_loadu_ps(train_images[thisDtId] + (96 * (p + 1)) + i),//Line 1
+                                        _mm256_mul_ps(_mm256_loadu_ps(kernel0_expand[0] + 0), _mm256_loadu_ps(train_images[thisDtId] + (96 * p) + i))//Line 0
+                                    )
+                                )
+                            )
+                        );
+                    }
+                    for (; i <= 96 - 4; i += 4) {
+                        _mm_storeu_ps(temp_row0 + i,
+                            _mm_fmadd_ps(_mm_loadu_ps(kernel0_expand[0] + 72 + 8), _mm_loadu_ps(train_images[thisDtId] + (96 * (p + 3)) + i),//Line 3
+                                _mm_fmadd_ps(_mm_loadu_ps(kernel0_expand[0] + 48 + 8), _mm_loadu_ps(train_images[thisDtId] + (96 * (p + 2)) + i),//Line 2
+                                    _mm_fmadd_ps(_mm_loadu_ps(kernel0_expand[0] + 24 + 8), _mm_loadu_ps(train_images[thisDtId] + (96 * (p + 1)) + i),//Line 1
+                                        _mm_mul_ps(_mm_loadu_ps(kernel0_expand[0] + 0 + 8), _mm_loadu_ps(train_images[thisDtId] + (96 * p) + i))//Line 0
+                                    )
+                                )
+                            )
+                        );
+                    }
+                    for (j = 3; j <= 96 - 12; j += 12) {
+                        sum4 = _mm_add_ps(
+                            _mm_add_ps(_mm256_extractf128_ps(_mm256_loadu_ps(temp_row0 + j), 0), _mm256_extractf128_ps(_mm256_loadu_ps(temp_row0 + j), 1)),
+                            _mm_loadu_ps(temp_row0 + j + 8)
+                        );
+                        sum4 = _mm_hadd_ps(sum4, sum4);
+                        sum4 = _mm_hadd_ps(sum4, sum4);
+                        featureMap0[0][(30 * p) + (j / 3)] += _mm_cvtss_f32(sum4);
+                    }
+
+                    _mm_prefetch((const char*)(train_images[thisDtId] + (96 * p)), _MM_HINT_T0);
+                    //Step 2
+                    for (i = 6; i <= 96 - 24; i += 24) {
+                        for (j = 0; j < 24; j += 8) {
+                            _mm256_storeu_ps(temp_row0 + i + j,
+                                _mm256_fmadd_ps(_mm256_loadu_ps(kernel0_expand[0] + 72 + j), _mm256_loadu_ps(train_images[thisDtId] + (96 * (p + 3)) + i + j),//Line 3
+                                    _mm256_fmadd_ps(_mm256_loadu_ps(kernel0_expand[0] + 48 + j), _mm256_loadu_ps(train_images[thisDtId] + (96 * (p + 2)) + i + j),//Line 2
+                                        _mm256_fmadd_ps(_mm256_loadu_ps(kernel0_expand[0] + 24 + j), _mm256_loadu_ps(train_images[thisDtId] + (96 * (p + 1)) + i + j),//Line 1
+                                            _mm256_mul_ps(_mm256_loadu_ps(kernel0_expand[0] + 0 + j), _mm256_loadu_ps(train_images[thisDtId] + (96 * p) + i + j))//Line 0
+                                        )
+                                    )
+                                )
+                            );
+                        }
+                    }
+                    for (; i <= 96 - 8; i += 8) {
+                        _mm256_storeu_ps(temp_row0 + i,
+                            _mm256_fmadd_ps(_mm256_loadu_ps(kernel0_expand[0] + 72), _mm256_loadu_ps(train_images[thisDtId] + (96 * (p + 3)) + i),//Line 3
+                                _mm256_fmadd_ps(_mm256_loadu_ps(kernel0_expand[0] + 48), _mm256_loadu_ps(train_images[thisDtId] + (96 * (p + 2)) + i),//Line 2
+                                    _mm256_fmadd_ps(_mm256_loadu_ps(kernel0_expand[0] + 24), _mm256_loadu_ps(train_images[thisDtId] + (96 * (p + 1)) + i),//Line 1
+                                        _mm256_mul_ps(_mm256_loadu_ps(kernel0_expand[0] + 0), _mm256_loadu_ps(train_images[thisDtId] + (96 * p) + i))//Line 0
+                                    )
+                                )
+                            )
+                        );
+                    }
+                    for (; i <= 96 - 4; i += 4) {
+                        _mm_storeu_ps(temp_row0 + i,
+                            _mm_fmadd_ps(_mm_loadu_ps(kernel0_expand[0] + 72 + 8), _mm_loadu_ps(train_images[thisDtId] + (96 * (p + 3)) + i),//Line 3
+                                _mm_fmadd_ps(_mm_loadu_ps(kernel0_expand[0] + 48 + 8), _mm_loadu_ps(train_images[thisDtId] + (96 * (p + 2)) + i),//Line 2
+                                    _mm_fmadd_ps(_mm_loadu_ps(kernel0_expand[0] + 24 + 8), _mm_loadu_ps(train_images[thisDtId] + (96 * (p + 1)) + i),//Line 1
+                                        _mm_mul_ps(_mm_loadu_ps(kernel0_expand[0] + 0 + 8), _mm_loadu_ps(train_images[thisDtId] + (96 * p) + i))//Line 0
+                                    )
+                                )
+                            )
+                        );
+                    }
+                    for (; i <= 96 - 1; i++) {
+                        temp_row0[i] = (kernel0_expand[0][i] * train_images[thisDtId][(96 * p) + i])
+                            + (kernel0_expand[0][24 + i]) * (train_images[thisDtId][(96 * (p + 1)) + i])
+                            + (kernel0_expand[0][48 + i]) * (train_images[thisDtId][(96 * (p + 2)) + i])
+                            + (kernel0_expand[0][72 + i]) * (train_images[thisDtId][(96 * (p + 3)) + i]);
+                    }
+                    for (j = 6; j <= 96 - 12; j += 12) {
+                        sum4 = _mm_add_ps(
+                            _mm_add_ps(_mm256_extractf128_ps(_mm256_loadu_ps(temp_row0 + j), 0), _mm256_extractf128_ps(_mm256_loadu_ps(temp_row0 + j), 1)),
+                            _mm_loadu_ps(temp_row0 + j + 8)
+                        );
+                        sum4 = _mm_hadd_ps(sum4, sum4);
+                        sum4 = _mm_hadd_ps(sum4, sum4);
+                        featureMap0[0][(30 * p) + (j / 3)] += _mm_cvtss_f32(sum4);
+                    }
+
+                    _mm_prefetch((const char*)(train_images[thisDtId] + (96 * p)), _MM_HINT_T0);
+                    //Step 3
+                    for (i = 9; i <= 96 - 24; i += 24) {
+                        for (j = 0; j < 24; j += 8) {
+                            _mm256_storeu_ps(temp_row0 + i + j,
+                                _mm256_fmadd_ps(_mm256_loadu_ps(kernel0_expand[0] + 72 + j), _mm256_loadu_ps(train_images[thisDtId] + (96 * (p + 3)) + i + j),//Line 3
+                                    _mm256_fmadd_ps(_mm256_loadu_ps(kernel0_expand[0] + 48 + j), _mm256_loadu_ps(train_images[thisDtId] + (96 * (p + 2)) + i + j),//Line 2
+                                        _mm256_fmadd_ps(_mm256_loadu_ps(kernel0_expand[0] + 24 + j), _mm256_loadu_ps(train_images[thisDtId] + (96 * (p + 1)) + i + j),//Line 1
+                                            _mm256_mul_ps(_mm256_loadu_ps(kernel0_expand[0] + 0 + j), _mm256_loadu_ps(train_images[thisDtId] + (96 * p) + i + j))//Line 0
+                                        )
+                                    )
+                                )
+                            );
+                        }
+                    }
+                    for (; i <= 96 - 8; i += 8) {
+                        _mm256_storeu_ps(temp_row0 + i,
+                            _mm256_fmadd_ps(_mm256_loadu_ps(kernel0_expand[0] + 72), _mm256_loadu_ps(train_images[thisDtId] + (96 * (p + 3)) + i),//Line 3
+                                _mm256_fmadd_ps(_mm256_loadu_ps(kernel0_expand[0] + 48), _mm256_loadu_ps(train_images[thisDtId] + (96 * (p + 2)) + i),//Line 2
+                                    _mm256_fmadd_ps(_mm256_loadu_ps(kernel0_expand[0] + 24), _mm256_loadu_ps(train_images[thisDtId] + (96 * (p + 1)) + i),//Line 1
+                                        _mm256_mul_ps(_mm256_loadu_ps(kernel0_expand[0] + 0), _mm256_loadu_ps(train_images[thisDtId] + (96 * p) + i))//Line 0
+                                    )
+                                )
+                            )
+                        );
+                    }
+                    for (; i <= 96 - 4; i += 4) {
+                        _mm_storeu_ps(temp_row0 + i,
+                            _mm_fmadd_ps(_mm_loadu_ps(kernel0_expand[0] + 72 + 8), _mm_loadu_ps(train_images[thisDtId] + (96 * (p + 3)) + i),//Line 3
+                                _mm_fmadd_ps(_mm_loadu_ps(kernel0_expand[0] + 48 + 8), _mm_loadu_ps(train_images[thisDtId] + (96 * (p + 2)) + i),//Line 2
+                                    _mm_fmadd_ps(_mm_loadu_ps(kernel0_expand[0] + 24 + 8), _mm_loadu_ps(train_images[thisDtId] + (96 * (p + 1)) + i),//Line 1
+                                        _mm_mul_ps(_mm_loadu_ps(kernel0_expand[0] + 0 + 8), _mm_loadu_ps(train_images[thisDtId] + (96 * p) + i))//Line 0
+                                    )
+                                )
+                            )
+                        );
+                    }
+                    for (j = 9; j <= 96 - 12; j += 12) {
+                        sum4 = _mm_add_ps(
+                            _mm_add_ps(_mm256_extractf128_ps(_mm256_loadu_ps(temp_row0 + j), 0), _mm256_extractf128_ps(_mm256_loadu_ps(temp_row0 + j), 1)),
+                            _mm_loadu_ps(temp_row0 + j + 8)
+                        );
+                        sum4 = _mm_hadd_ps(sum4, sum4);
+                        sum4 = _mm_hadd_ps(sum4, sum4);
+                        featureMap0[0][(30 * p) + (j / 3)] += _mm_cvtss_f32(sum4);
+                    }
+*/
