@@ -1,133 +1,118 @@
-#include <iostream>
-#include <cstdlib>
-#include <iomanip>
+// g++ -O3 -march=native -funroll-all-loops -mavx2 -o dot dot.cpp
+
+#include <stdio.h>
+#include <stdlib.h>
 #include <random>
-#include <chrono>
+#include <iostream>
+#include <vector>
 #include <immintrin.h>
+#include <chrono>
 
-float dot_product(const float* a, const float* b, int n) {
-  __m256 sum = _mm256_setzero_ps();
-  int i = 0;
+#define VECTOR_SIZE 104857600
+#define NUM_RUNS 100
+#define BLOCK_NUM 2048
 
-  // AVX2 64
-  for (; i <= n - 64; i += 64) {
-    _mm_prefetch((const char*)(a + i + 64), _MM_HINT_T0);
-    _mm_prefetch((const char*)(b + i + 64), _MM_HINT_T0);
+using namespace std;
 
-    sum = _mm256_fmadd_ps(_mm256_loadu_ps(a + i), _mm256_loadu_ps(b + i), sum);
-    sum = _mm256_fmadd_ps(_mm256_loadu_ps(a + i + 8), _mm256_loadu_ps(b + i + 8), sum);
-    sum = _mm256_fmadd_ps(_mm256_loadu_ps(a + i + 16), _mm256_loadu_ps(b + i + 16), sum);
-    sum = _mm256_fmadd_ps(_mm256_loadu_ps(a + i + 24), _mm256_loadu_ps(b + i + 24), sum);
-    sum = _mm256_fmadd_ps(_mm256_loadu_ps(a + i + 32), _mm256_loadu_ps(b + i + 32), sum);
-    sum = _mm256_fmadd_ps(_mm256_loadu_ps(a + i + 40), _mm256_loadu_ps(b + i + 40), sum);
-    sum = _mm256_fmadd_ps(_mm256_loadu_ps(a + i + 48), _mm256_loadu_ps(b + i + 48), sum);
-    sum = _mm256_fmadd_ps(_mm256_loadu_ps(a + i + 56), _mm256_loadu_ps(b + i + 56), sum);
-  }
-
-  // AVX2 32
-  for (; i <= n - 32; i += 32) {
-    _mm_prefetch((const char*)(a + i + 32), _MM_HINT_T0);
-    _mm_prefetch((const char*)(b + i + 32), _MM_HINT_T0);
-
-    sum = _mm256_fmadd_ps(_mm256_loadu_ps(a + i), _mm256_loadu_ps(b + i), sum);
-    sum = _mm256_fmadd_ps(_mm256_loadu_ps(a + i + 8), _mm256_loadu_ps(b + i + 8), sum);
-    sum = _mm256_fmadd_ps(_mm256_loadu_ps(a + i + 16), _mm256_loadu_ps(b + i + 16), sum);
-    sum = _mm256_fmadd_ps(_mm256_loadu_ps(a + i + 24), _mm256_loadu_ps(b + i + 24), sum);
-  }
-
-  // AVX2 16
-  for (; i <= n - 16; i += 16) {
-    _mm_prefetch((const char*)(a + i + 16), _MM_HINT_T0);
-    _mm_prefetch((const char*)(b + i + 16), _MM_HINT_T0);
-
-    sum = _mm256_fmadd_ps(_mm256_loadu_ps(a + i), _mm256_loadu_ps(b + i), sum);
-    sum = _mm256_fmadd_ps(_mm256_loadu_ps(a + i + 8), _mm256_loadu_ps(b + i + 8), sum);
-  }
-
-  // AVX2 8
-  for (; i <= n - 8; i += 8) {
-    sum = _mm256_fmadd_ps(_mm256_loadu_ps(a + i), _mm256_loadu_ps(b + i), sum);
-  }
-
-  // SSE2 4
-  if (i <= n - 4) {
-    __m128 sum4 = _mm_fmadd_ps(_mm_loadu_ps(a + i), _mm_loadu_ps(b + i), _mm_setzero_ps());
-    
-    // SSE2
-    sum4 = _mm_hadd_ps(sum4, sum4);
-    sum4 = _mm_hadd_ps(sum4, sum4);
-
-    // SSE2 to AVX2
-    sum = _mm256_add_ps(sum, _mm256_castps128_ps256(sum4));
-
-    i += 4;
-  }
-
-  // AVX2
-  __m128 sum_high = _mm256_extractf128_ps(sum, 1);
-  __m128 sum_low = _mm256_extractf128_ps(sum, 0);
-  sum_low = _mm_add_ps(sum_low, sum_high);
-  sum_low = _mm_hadd_ps(sum_low, sum_low);
-  sum_low = _mm_hadd_ps(sum_low, sum_low);
-  float re = _mm_cvtss_f32(sum_low);
-
-  for (; i < n; ++i) {
-    re += a[i] * b[i];
-  }
-
-  return re;
-}
-
-float dot_product_g(float* lhs, float* rhs, int n) {
-    float sum = 0.0f;
-    int i = 0;
-    for (; i < n-4; i += 4) {
-        sum += lhs[i] * rhs[i]; 
-        sum += lhs[i + 1] * rhs[i + 1];
-        sum += lhs[i + 2] * rhs[i + 2];
-        sum += lhs[i + 3] * rhs[i + 3];
-    }
-    for(;i<n;i++){
-        sum += lhs[i] * rhs[i];
-    }
-    return sum;
-}
 
 int main() {
-    float a[1234];
-    float b[1234];
-    float re = 0;
-    float re2 = 0;
-
     std::random_device rd;
     std::mt19937 gen(rd());
-    std::uniform_real_distribution<float> dis(-0.2f, 0.2f);
-    for(int index = 0; index < 1234; index++){
-        a[index] = dis(gen);
-    }
-    for(int index = 0; index < 1234; index++){
-        b[index] = dis(gen);
-    }
-    
-    auto start = std::chrono::high_resolution_clock::now();
-    for(int i = 0; i < 1; i++){
-        re += dot_product(a, b, 1234);
-    }
-    auto end = std::chrono::high_resolution_clock::now();
+    std::uniform_real_distribution<float> dis(-1, 1);
 
-    auto start2 = std::chrono::high_resolution_clock::now();
-    for(int i = 0; i < 1; i++){
-        re2 += dot_product_g(a, b, 1234);
+    // block mem malloc
+    vector<float*> vectorA(BLOCK_NUM);
+    vector<float*> vectorB(BLOCK_NUM);
+    for(int i = 0; i < BLOCK_NUM; i++){
+        vectorA[i] = static_cast<float*>(_mm_malloc((VECTOR_SIZE / BLOCK_NUM) * sizeof(float), 32));
+        vectorB[i] = static_cast<float*>(_mm_malloc((VECTOR_SIZE / BLOCK_NUM) * sizeof(float), 32));
     }
-    auto end2 = std::chrono::high_resolution_clock::now();
+    // random
+    for (int i = 0; i < BLOCK_NUM; i++) {
+        for (int j = 0; j < VECTOR_SIZE / BLOCK_NUM; j++){
+            vectorA[i][j] = dis(gen);
+            vectorB[i][j] = dis(gen);
+        }
+    }
 
-    std::chrono::duration<double> duration = end - start;
-    std::cout << re << std::endl;
-    std::cout << duration.count() << "s" << std::endl;
+    double dot_product;
+    clock_t start, end;
+    double total_time = 0.0;
+    for (int run = 0; run < NUM_RUNS; run++) {
+        __m256 sum = _mm256_setzero_ps();
+        __m128 sum_high;
+        __m128 sum_low;
+        int i, j;
 
-    std::chrono::duration<double> duration2 = end2 - start2;
-    std::cout << re2 << std::endl;
-    std::cout << duration2.count() << "s" << std::endl;
+        auto start = std::chrono::high_resolution_clock::now();
+
+        for(i = 0; i < BLOCK_NUM; i++){
+            _mm_prefetch((const char*)(vectorA[i]), _MM_HINT_T0);
+            for (j = 0; j <= (VECTOR_SIZE / BLOCK_NUM) - 56; j += 56) {
+                __asm__ volatile (
+                    "vmovaps (%0), %%ymm0\n"
+                    "vmovaps 0x20(%0), %%ymm2\n"
+                    "vmovaps 0x40(%0), %%ymm4\n"
+                    "vmovaps 0x60(%0), %%ymm6\n"
+                    "vmovaps 0x80(%0), %%ymm8\n"
+                    "vmovaps 0xa0(%0), %%ymm10\n"
+                    "vmovaps 0xc0(%0), %%ymm12\n"
+
+                    "vmovaps (%1), %%ymm1\n"
+                    "vmovaps 0x20(%1), %%ymm3\n"
+                    "vmovaps 0x40(%1), %%ymm5\n"
+                    "vmovaps 0x60(%1), %%ymm7\n"
+                    "vmovaps 0x80(%1), %%ymm9\n"
+                    "vmovaps 0xa0(%1), %%ymm11\n"
+                    "vmovaps 0xc0(%1), %%ymm13\n"
+
+                    "vfmadd231ps %%ymm0, %%ymm1, %%ymm14\n"
+                    "vfmadd231ps %%ymm2, %%ymm3, %%ymm14\n"
+                    "vfmadd231ps %%ymm4, %%ymm5, %%ymm14\n"
+                    "vfmadd231ps %%ymm6, %%ymm7, %%ymm14\n"
+                    "vfmadd231ps %%ymm8, %%ymm9, %%ymm14\n"
+                    "vfmadd231ps %%ymm10, %%ymm11, %%ymm14\n"
+                    "vfmadd231ps %%ymm12, %%ymm13, %%ymm14\n"
+
+                    : // No output operands
+                    : "r" (vectorA[i] + j), "r" (vectorB[i] + j)
+                    : "memory", "ymm0", "ymm1", "ymm2", "ymm3", "ymm4", "ymm5", "ymm6", "ymm7", "ymm8", "ymm9", "ymm10", "ymm11", "ymm12", "ymm13", "ymm14"
+                );
+            }
+            __asm__ volatile (
+                    "vmovaps (%0), %%ymm0\n"
+                    "vmovaps 0x20(%0), %%ymm2\n"
+
+                    "vmovaps (%1), %%ymm1\n"
+                    "vmovaps 0x20(%1), %%ymm3\n"
+
+                    "vfmadd231ps %%ymm0, %%ymm1, %%ymm14\n"
+                    "vfmadd231ps %%ymm2, %%ymm3, %%ymm14\n"
+
+                    : // No output operands
+                    : "r" (vectorA[i] + j), "r" (vectorB[i] + j)
+                    : "memory", "ymm0", "ymm1", "ymm2", "ymm3", "ymm14"
+            );
+        }
+        __asm__ volatile (
+            "vmovaps %%ymm14, %0"
+            : "=m" (sum)  // output: sum
+            : // No input operands
+            : "ymm14" // Clobbered register
+        );
+        sum_high = _mm256_extractf128_ps(sum, 1);
+        sum_low = _mm256_extractf128_ps(sum, 0);
+        sum_low = _mm_add_ps(sum_low, sum_high);
+        sum_low = _mm_hadd_ps(sum_low, sum_low);
+        sum_low = _mm_hadd_ps(sum_low, sum_low);
+        dot_product = _mm_cvtss_f32(sum_low);
+
+        auto end = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double> duration = end - start;
+        std::cout << duration.count() << "s" << std::endl;
+    }
+
+    printf("Dot product: %f\n", dot_product);
 
     return 0;
 }
