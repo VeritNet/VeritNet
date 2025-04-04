@@ -3,6 +3,7 @@
 * g++ -O3 -march=native -funroll-all-loops -mavx2 -o v6.exe v6.cpp
 * Version 2024.10.7.6
 * [128 Elu, 32 Elu, 10 Softmax]
+* 注意若要修改线程数量需重分块
 */
 
 #include <iostream>
@@ -16,6 +17,7 @@
 #include <chrono>
 #include <atomic>
 #include <immintrin.h>
+#include <unistd.h>
 #include "MNIST.h"
 
 
@@ -49,45 +51,134 @@ int dts;//Training Data Limit
 int batchSize;
 
 //Weight (and bias at the end of each array) (Shared Memory)
-float* network0 = static_cast<float*>(_mm_malloc(128*784 * sizeof(float), 32));
-float* network1 = static_cast<float*>(_mm_malloc(32*128 * sizeof(float), 32));
-float* network2 = static_cast<float*>(_mm_malloc(10*32 * sizeof(float), 32));
-float* network0_bi = static_cast<float*>(_mm_malloc(128 * sizeof(float), 32));
-float* network1_bi = static_cast<float*>(_mm_malloc(32 * sizeof(float), 32));
-float* network2_bi = static_cast<float*>(_mm_malloc(10 * sizeof(float), 32));
+float* network0 = static_cast<float*>(_mm_malloc(128*784 * sizeof(float), 64));
+float* network1 = static_cast<float*>(_mm_malloc(32*128 * sizeof(float), 64));
+float* network2 = static_cast<float*>(_mm_malloc(10*32 * sizeof(float), 64));
+float* network0_bi = static_cast<float*>(_mm_malloc(128 * sizeof(float), 64));
+float* network1_bi = static_cast<float*>(_mm_malloc(32 * sizeof(float), 64));
+float* network2_bi = static_cast<float*>(_mm_malloc(10 * sizeof(float), 64));
 
 float MSETotal;//MSE Cost
 
 //Network Gradients (Shared Memory)
-float* networkgs0 = static_cast<float*>(_mm_malloc(128*784 * sizeof(float), 32));
-float* networkgs1 = static_cast<float*>(_mm_malloc(32*128 * sizeof(float), 32));
-float* networkgs2 = static_cast<float*>(_mm_malloc(10*32 * sizeof(float), 32));
-float* networkgs0_bi = static_cast<float*>(_mm_malloc(128 * sizeof(float), 32));
-float* networkgs1_bi = static_cast<float*>(_mm_malloc(32 * sizeof(float), 32));
-float* networkgs2_bi = static_cast<float*>(_mm_malloc(10 * sizeof(float), 32));
+float* networkgs0 = static_cast<float*>(_mm_malloc(128*784 * sizeof(float), 64));
+float* networkgs1 = static_cast<float*>(_mm_malloc(32*128 * sizeof(float), 64));
+float* networkgs2 = static_cast<float*>(_mm_malloc(10*32 * sizeof(float), 64));
+float* networkgs0_bi = static_cast<float*>(_mm_malloc(128 * sizeof(float), 64));
+float* networkgs1_bi = static_cast<float*>(_mm_malloc(32 * sizeof(float), 64));
+float* networkgs2_bi = static_cast<float*>(_mm_malloc(10 * sizeof(float), 64));
 
 //Locks for Blocks
-std::vector<std::mutex> networkgs0_mtx(8);
+std::vector<std::mutex> networkgs0_mtx(16);
 std::vector<std::mutex> networkgs1_mtx(1);
 std::vector<std::mutex> networkgs2_mtx(1);
 bool gate;//Main Thread Gate
 int reportI = 0;
 int BId = 0;//Batch Id
 float rate, aim, err;//Learning Rate, MSE aim, Cost of 1 Epoch
+
+
+#define forward_a(i) \
+sum = _mm256_fmadd_ps(_mm256_load_ps(network0 + (p * 784) + i), _mm256_load_ps(train_image[thisDtId] + i), sum);\
+sum = _mm256_fmadd_ps(_mm256_load_ps(network0 + (p * 784) + i + 8), _mm256_load_ps(train_image[thisDtId] + i + 8), sum);\
+sum = _mm256_fmadd_ps(_mm256_load_ps(network0 + (p * 784) + i + 16), _mm256_load_ps(train_image[thisDtId] + i + 16), sum);\
+sum = _mm256_fmadd_ps(_mm256_load_ps(network0 + (p * 784) + i + 24), _mm256_load_ps(train_image[thisDtId] + i + 24), sum);\
+sum = _mm256_fmadd_ps(_mm256_load_ps(network0 + (p * 784) + i + 32), _mm256_load_ps(train_image[thisDtId] + i + 32), sum);\
+sum = _mm256_fmadd_ps(_mm256_load_ps(network0 + (p * 784) + i + 40), _mm256_load_ps(train_image[thisDtId] + i + 40), sum);\
+sum = _mm256_fmadd_ps(_mm256_load_ps(network0 + (p * 784) + i + 48), _mm256_load_ps(train_image[thisDtId] + i + 48), sum);\
+sum = _mm256_fmadd_ps(_mm256_load_ps(network0 + (p * 784) + i + 56), _mm256_load_ps(train_image[thisDtId] + i + 56), sum);\
+
+#define bp_a(i) \
+__asm__ volatile (\
+    "vmovaps (%0), %%ymm0\n"\
+    "vmovaps 0x20(%0), %%ymm1\n"\
+    "vmovaps 0x40(%0), %%ymm2\n"\
+    "vmovaps 0x60(%0), %%ymm3\n"\
+    "vmovaps 0x80(%0), %%ymm4\n"\
+    "vmovaps 0xa0(%0), %%ymm5\n"\
+    "vmovaps 0xc0(%0), %%ymm6\n"\
+    "vmovaps (%1), %%ymm7\n"\
+    "vmovaps 0x20(%1), %%ymm8\n"\
+    "vmovaps 0x40(%1), %%ymm9\n"\
+    "vmovaps 0x60(%1), %%ymm10\n"\
+    "vmovaps 0x80(%1), %%ymm11\n"\
+    "vmovaps 0xa0(%1), %%ymm12\n"\
+    "vmovaps 0xc0(%1), %%ymm13\n"\
+    "vmovaps %2, %%ymm14\n"\
+    "vfmadd231ps %%ymm14, %%ymm0, %%ymm7\n"\
+    "vfmadd231ps %%ymm14, %%ymm1, %%ymm8\n"\
+    "vfmadd231ps %%ymm14, %%ymm2, %%ymm9\n"\
+    "vfmadd231ps %%ymm14, %%ymm3, %%ymm10\n"\
+    "vfmadd231ps %%ymm14, %%ymm4, %%ymm11\n"\
+    "vfmadd231ps %%ymm14, %%ymm5, %%ymm12\n"\
+    "vfmadd231ps %%ymm14, %%ymm6, %%ymm13\n"\
+    "vmovaps %%ymm7, (%1)\n"\
+    "vmovaps %%ymm8, 0x20(%1)\n"\
+    "vmovaps %%ymm9, 0x40(%1)\n"\
+    "vmovaps %%ymm10, 0x60(%1)\n"\
+    "vmovaps %%ymm11, 0x80(%1)\n"\
+    "vmovaps %%ymm12, 0xa0(%1)\n"\
+    "vmovaps %%ymm13, 0xc0(%1)\n"\
+    : \
+    : "r" (train_image[thisDtId] + i), "r" (networkg0 + (p * 784) + i), "x" (factor)\
+    : "memory", "ymm0", "ymm1", "ymm2", "ymm3", "ymm4", "ymm5", "ymm6", "ymm7", "ymm8", "ymm9", "ymm10", "ymm11", "ymm12", "ymm13", "ymm14"\
+);
+
+#define up_a(i) \
+__asm__ volatile (\
+    "vmovaps (%0), %%ymm0\n"\
+    "vmovaps 0x20(%0), %%ymm1\n"\
+    "vmovaps 0x40(%0), %%ymm2\n"\
+    "vmovaps 0x60(%0), %%ymm3\n"\
+    "vmovaps 0x80(%0), %%ymm4\n"\
+    "vmovaps 0xa0(%0), %%ymm5\n"\
+    "vmovaps 0xc0(%0), %%ymm6\n"\
+    "vmovaps 0xe0(%0), %%ymm7\n"\
+    "vmovaps (%1), %%ymm8\n"\
+    "vmovaps 0x20(%1), %%ymm9\n"\
+    "vmovaps 0x40(%1), %%ymm10\n"\
+    "vmovaps 0x60(%1), %%ymm11\n"\
+    "vmovaps 0x80(%1), %%ymm12\n"\
+    "vmovaps 0xa0(%1), %%ymm13\n"\
+    "vmovaps 0xc0(%1), %%ymm14\n"\
+    "vmovaps 0xe0(%1), %%ymm15\n"\
+    "vaddps %%ymm8, %%ymm0, %%ymm0\n"\
+    "vaddps %%ymm9, %%ymm1, %%ymm1\n"\
+    "vaddps %%ymm10, %%ymm2, %%ymm2\n"\
+    "vaddps %%ymm11, %%ymm3, %%ymm3\n"\
+    "vaddps %%ymm12, %%ymm4, %%ymm4\n"\
+    "vaddps %%ymm13, %%ymm5, %%ymm5\n"\
+    "vaddps %%ymm14, %%ymm6, %%ymm6\n"\
+    "vaddps %%ymm15, %%ymm7, %%ymm7\n"\
+    "vmovaps %%ymm0, (%1)\n"\
+    "vmovaps %%ymm1, 0x20(%1)\n"\
+    "vmovaps %%ymm2, 0x40(%1)\n"\
+    "vmovaps %%ymm3, 0x60(%1)\n"\
+    "vmovaps %%ymm4, 0x80(%1)\n"\
+    "vmovaps %%ymm5, 0xa0(%1)\n"\
+    "vmovaps %%ymm6, 0xc0(%1)\n"\
+    "vmovaps %%ymm7, 0xe0(%1)\n"\
+    : \
+    : "r" (networkg0 + ((mtx_index_0 * 8 + p) * 784) + i), "r" (networkgs0 + ((mtx_index_0 * 8 + p) * 784) + i)\
+    : "memory", "ymm0", "ymm1", "ymm2", "ymm3", "ymm4", "ymm5", "ymm6", "ymm7", "ymm8", "ymm9", "ymm10", "ymm11", "ymm12", "ymm13", "ymm14", "ymm15"\
+);
+
+
+
 inline void trainNet(int TId/*Thread Id*/) {
     tpool->TGate[TId] = new mutex;
     tpool->TGate[TId]->lock();
     int thisDtId;
 
     //Block update of gradients in shared memory
-    vector<bool> networkg0_todoList(8);
+    vector<bool> networkg0_todoList(16);
     vector<bool> networkg1_todoList(1);
     vector<bool> networkg2_todoList(1);
     
     float MSError{};//Error Sum of All Data in this Epoch in this Thread
 
     float SSum;//For Softmax Activation
-    int i, p, q, dtIndex;//Loop Index
+    int dtIndex;//Loop Index
     int mtx_index_0, mtx_index_1, mtx_index_2;//Lock Index
     __m256 sum, factor, mask,
         exp_temp, exp_fx, exp_floor_fx, exp_x_squared;//For SIMD
@@ -108,20 +199,20 @@ inline void trainNet(int TId/*Thread Id*/) {
     const __m256 padding_half = _mm256_set1_ps(0.5f);
     const __m256i INT_7F = _mm256_set1_epi32(0x7F);
 
-    float* networkg0 = static_cast<float*>(_mm_malloc(128*784 * sizeof(float), 32));//Network Gradients (Thread Memory)
-    float* networkg0_bi = static_cast<float*>(_mm_malloc(128 * sizeof(float), 32));
-    float* networkb0 = static_cast<float*>(_mm_malloc(128 * sizeof(float), 32));//w*x + b (Before Activation) for hidden layer 0
-    float* networkn0 = static_cast<float*>(_mm_malloc(128 * sizeof(float), 32));//Activation for hidden layer 0
+    float* networkg0 = static_cast<float*>(_mm_malloc(128*784 * sizeof(float), 64));//Network Gradients (Thread Memory)
+    float* networkg0_bi = static_cast<float*>(_mm_malloc(128 * sizeof(float), 64));
+    float* networkb0 = static_cast<float*>(_mm_malloc(128 * sizeof(float), 64));//w*x + b (Before Activation) for hidden layer 0
+    float* networkn0 = static_cast<float*>(_mm_malloc(128 * sizeof(float), 64));//Activation for hidden layer 0
 
-    float* networkg1 = static_cast<float*>(_mm_malloc(32*128 * sizeof(float), 32));//Network Gradients (Thread Memory)
-    float* networkg1_bi = static_cast<float*>(_mm_malloc(32 * sizeof(float), 32));
-    float* networkb1 = static_cast<float*>(_mm_malloc(32 * sizeof(float), 32));//..for hidden layer 1
-    float* networkn1 = static_cast<float*>(_mm_malloc(32 * sizeof(float), 32));//..for hidden layer 1
+    float* networkg1 = static_cast<float*>(_mm_malloc(32*128 * sizeof(float), 64));//Network Gradients (Thread Memory)
+    float* networkg1_bi = static_cast<float*>(_mm_malloc(32 * sizeof(float), 64));
+    float* networkb1 = static_cast<float*>(_mm_malloc(32 * sizeof(float), 64));//..for hidden layer 1
+    float* networkn1 = static_cast<float*>(_mm_malloc(32 * sizeof(float), 64));//..for hidden layer 1
 
-    float* networkg2 = static_cast<float*>(_mm_malloc(10*32 * sizeof(float), 32));//Network Gradients (Thread Memory)
-    float* networkg2_bi = static_cast<float*>(_mm_malloc(10 * sizeof(float), 32));
-    float* networkb2 = static_cast<float*>(_mm_malloc(10 * sizeof(float), 32));//..for hidden layer 2
-    float* networkn2 = static_cast<float*>(_mm_malloc(10 * sizeof(float), 32));//..for hidden layer 2
+    float* networkg2 = static_cast<float*>(_mm_malloc(10*32 * sizeof(float), 64));//Network Gradients (Thread Memory)
+    float* networkg2_bi = static_cast<float*>(_mm_malloc(10 * sizeof(float), 64));
+    float* networkb2 = static_cast<float*>(_mm_malloc(10 * sizeof(float), 64));//..for hidden layer 2
+    float* networkn2 = static_cast<float*>(_mm_malloc(10 * sizeof(float), 64));//..for hidden layer 2
 
     std::fill(networkg0, networkg0 + 100352, 0);
     std::fill(networkg0_bi, networkg0_bi + 128, 0);
@@ -138,9 +229,9 @@ inline void trainNet(int TId/*Thread Id*/) {
     std::fill(networkb2, networkb2 + 10, 0);
 
     //The gradient of neurons is equal to the gradient of neuron bias
-    float* networkg0_neuron = static_cast<float*>(_mm_malloc(128 * sizeof(float), 32));
-    float* networkg1_neuron = static_cast<float*>(_mm_malloc(32 * sizeof(float), 32));
-    float* networkg2_neuron = static_cast<float*>(_mm_malloc(10 * sizeof(float), 32));
+    float* networkg0_neuron = static_cast<float*>(_mm_malloc(128 * sizeof(float), 64));
+    float* networkg1_neuron = static_cast<float*>(_mm_malloc(32 * sizeof(float), 64));
+    float* networkg2_neuron = static_cast<float*>(_mm_malloc(10 * sizeof(float), 64));
     std::fill(networkg0_neuron, networkg0_neuron + 128, 0);
     std::fill(networkg1_neuron, networkg1_neuron + 32, 0);
     std::fill(networkg2_neuron, networkg2_neuron + 10, 0);
@@ -152,25 +243,26 @@ inline void trainNet(int TId/*Thread Id*/) {
             thisDtId = (batchSize * BId) + (TId * (batchSize / tpool->TSize)) + dtIndex;
             //Feed Forward
             //Input Layer - Hidden Layer 0
-            for (p = 0; p < 128; p++) {
+            for (int p = 0; p < 128; p++) {
                 sum = _mm256_setzero_ps();
-                i = 0;
-                _mm_prefetch((const char*)(network0 + (p * 784)), _MM_HINT_T0);
-                for (; i <= 784 - 64; i += 64) {
-                    sum = _mm256_fmadd_ps(_mm256_load_ps(network0 + (p * 784) + i), _mm256_load_ps(train_image[thisDtId] + i), sum);
-                    sum = _mm256_fmadd_ps(_mm256_load_ps(network0 + (p * 784) + i + 8), _mm256_load_ps(train_image[thisDtId] + i + 8), sum);
-                    sum = _mm256_fmadd_ps(_mm256_load_ps(network0 + (p * 784) + i + 16), _mm256_load_ps(train_image[thisDtId] + i + 16), sum);
-                    sum = _mm256_fmadd_ps(_mm256_load_ps(network0 + (p * 784) + i + 24), _mm256_load_ps(train_image[thisDtId] + i + 24), sum);
-                    sum = _mm256_fmadd_ps(_mm256_load_ps(network0 + (p * 784) + i + 32), _mm256_load_ps(train_image[thisDtId] + i + 32), sum);
-                    sum = _mm256_fmadd_ps(_mm256_load_ps(network0 + (p * 784) + i + 40), _mm256_load_ps(train_image[thisDtId] + i + 40), sum);
-                    sum = _mm256_fmadd_ps(_mm256_load_ps(network0 + (p * 784) + i + 48), _mm256_load_ps(train_image[thisDtId] + i + 48), sum);
-                    sum = _mm256_fmadd_ps(_mm256_load_ps(network0 + (p * 784) + i + 56), _mm256_load_ps(train_image[thisDtId] + i + 56), sum);
-                }
-                for (; i <= 784 - 16; i += 16) {
-                    _mm_prefetch((const char*)(network0 + i + 16), _MM_HINT_T0);
-                    sum = _mm256_fmadd_ps(_mm256_load_ps(network0 + (p * 784) + i), _mm256_load_ps(train_image[thisDtId] + i), sum);
-                    sum = _mm256_fmadd_ps(_mm256_load_ps(network0 + (p * 784) + i + 8), _mm256_load_ps(train_image[thisDtId] + i + 8), sum);
-                }
+                //int i = 0;
+                //_mm_prefetch((const char*)(network0 + (p * 784)), _MM_HINT_T0);
+                forward_a(0)
+                forward_a(64)
+                forward_a(128)
+                forward_a(192)
+                forward_a(256)
+                forward_a(320)
+                forward_a(384)
+                forward_a(448)
+                forward_a(512)
+                forward_a(576)
+                forward_a(640)
+                forward_a(704)
+                //_mm_prefetch((const char*)(network0 + i + 16), _MM_HINT_T0);
+                sum = _mm256_fmadd_ps(_mm256_load_ps(network0 + (p * 784) + 768), _mm256_load_ps(train_image[thisDtId] + 768), sum);
+                sum = _mm256_fmadd_ps(_mm256_load_ps(network0 + (p * 784) + 768 + 8), _mm256_load_ps(train_image[thisDtId] + 768 + 8), sum);
+
                 sum_high = _mm256_extractf128_ps(sum, 1);
                 sum_low = _mm256_extractf128_ps(sum, 0);
                 sum_low = _mm_add_ps(sum_low, sum_high);
@@ -178,7 +270,7 @@ inline void trainNet(int TId/*Thread Id*/) {
                 sum_low = _mm_hadd_ps(sum_low, sum_low);
                 networkb0[p] = _mm_cvtss_f32(sum_low);
             }
-            for (p = 0; p <= 128 - 64; p += 64) {
+            for (int p = 0; p <= 128 - 64; p += 64) {
                 _mm256_store_ps(networkb0 + p, _mm256_add_ps(_mm256_load_ps(networkb0 + p), _mm256_load_ps(network0_bi + p)));
                 _mm256_store_ps(networkb0 + p + 8, _mm256_add_ps(_mm256_load_ps(networkb0 + p + 8), _mm256_load_ps(network0_bi + p + 8)));
                 _mm256_store_ps(networkb0 + p + 16, _mm256_add_ps(_mm256_load_ps(networkb0 + p + 16), _mm256_load_ps(network0_bi + p + 16)));
@@ -188,7 +280,7 @@ inline void trainNet(int TId/*Thread Id*/) {
                 _mm256_store_ps(networkb0 + p + 48, _mm256_add_ps(_mm256_load_ps(networkb0 + p + 48), _mm256_load_ps(network0_bi + p + 48)));
                 _mm256_store_ps(networkb0 + p + 56, _mm256_add_ps(_mm256_load_ps(networkb0 + p + 56), _mm256_load_ps(network0_bi + p + 56)));
             }
-            for (p = 0; p < 128; p++) {
+            for (int p = 0; p < 128; p++) {
                 if (networkb0[p] >= 0) {
                     networkn0[p] = networkb0[p];
                 } else {
@@ -197,10 +289,10 @@ inline void trainNet(int TId/*Thread Id*/) {
             }
 
             //Hidden Layer 0 - Hidden Layer 1
-            for (p = 0; p < 32; p++) {
+            for (int p = 0; p < 32; p++) {
                 sum = _mm256_setzero_ps();
-                i = 0;
-                _mm_prefetch((const char*)(network1), _MM_HINT_T0);
+                int i = 0;
+                //_mm_prefetch((const char*)(network1), _MM_HINT_T0);
                 for (; i <= 128 - 64; i += 64) {
                     sum = _mm256_fmadd_ps(_mm256_load_ps(network1 + (p * 128) + i), _mm256_load_ps(networkn0 + i), sum);
                     sum = _mm256_fmadd_ps(_mm256_load_ps(network1 + (p * 128) + i + 8), _mm256_load_ps(networkn0 + i + 8), sum);
@@ -222,7 +314,7 @@ inline void trainNet(int TId/*Thread Id*/) {
             _mm256_store_ps(networkb1 + 8, _mm256_add_ps(_mm256_load_ps(networkb1 + 8), _mm256_load_ps(network1_bi + 8)));
             _mm256_store_ps(networkb1 + 16, _mm256_add_ps(_mm256_load_ps(networkb1 + 16), _mm256_load_ps(network1_bi + 16)));
             _mm256_store_ps(networkb1 + 24, _mm256_add_ps(_mm256_load_ps(networkb1 + 24), _mm256_load_ps(network1_bi + 24)));
-            for (p = 0; p < 32; p++) {
+            for (int p = 0; p < 32; p++) {
                 if (networkb1[p] >= 0) {
                     networkn1[p] = networkb1[p];
                 } else {
@@ -231,10 +323,10 @@ inline void trainNet(int TId/*Thread Id*/) {
             }
 
             //Hidden Layer 1 - Hidden Layer 2
-            for (p = 0; p < 10; p++) {
+            for (int p = 0; p < 10; p++) {
                 sum = _mm256_setzero_ps();
-                i = 0;
-                _mm_prefetch((const char*)(network2), _MM_HINT_T0);
+                int i = 0;
+                //_mm_prefetch((const char*)(network2), _MM_HINT_T0);
                 for (; i <= 32 - 32; i += 32) {
                     sum = _mm256_fmadd_ps(_mm256_load_ps(network2 + (p * 32) + i), _mm256_load_ps(networkn1 + i), sum);
                     sum = _mm256_fmadd_ps(_mm256_load_ps(network2 + (p * 32) + i + 8), _mm256_load_ps(networkn1 + i + 8), sum);
@@ -295,15 +387,15 @@ inline void trainNet(int TId/*Thread Id*/) {
             
             
             //Loss
-            for (p = 0; p < 10; p++) {
+            for (int p = 0; p < 10; p++) {
                 MSError += ((train_label[thisDtId][p] - networkn2[p]) * (train_label[thisDtId][p] - networkn2[p]));
             }
 
             //Back Propagation
             //Output Layer - Hidden Layer 2
-            for (p = 0; p < 10; p++) {
+            for (int p = 0; p < 10; p++) {
                 networkg2_neuron[p] = -rate * (networkn2[p] - train_label[thisDtId][p]);
-                _mm_prefetch((const char*)(networkg2 + (p * 32)), _MM_HINT_T0);
+                //_mm_prefetch((const char*)(networkg2 + (p * 32)), _MM_HINT_T0);
                 __asm__ volatile (
                     // Load 4 ymm registers from a
                     "vmovaps (%0), %%ymm0\n"
@@ -350,17 +442,18 @@ inline void trainNet(int TId/*Thread Id*/) {
             networkg2_bi[9] += networkg2_neuron[9];
 
             //Hidden Layer 2 - Hidden Layer 1
-            for (p = 0; p < 32; p++) {
+            for (int p = 0; p < 32; p++) {
                 networkg1_neuron[p] = 0;
-                for (q = 0; q < 10; q++) {
+                for (int q = 0; q < 10; q++) {
                     networkg1_neuron[p] += networkg2_neuron[q] * network2[(q * 32) + p];
                 }
                 if (networkb1[p] < 0) {
                     networkg1_neuron[p] *= exp(networkb1[p]);
                 }
-                _mm_prefetch((const char*)(networkg1 + (p * 128)), _MM_HINT_T0);
+                //_mm_prefetch((const char*)(networkg1 + (p * 128)), _MM_HINT_T0);
                 factor = _mm256_set1_ps(networkg1_neuron[p]);
-                for (i = 0; i <= 128 - 56; i += 56) {
+                int i = 0;
+                for (; i <= 128 - 56; i += 56) {
                     __asm__ volatile (
                         // Load 7 ymm registers from a
                         "vmovaps (%0), %%ymm0\n"
@@ -458,64 +551,32 @@ inline void trainNet(int TId/*Thread Id*/) {
             );
 
             //Hidden Layer 1 - Hidden Layer 0
-            for (p = 0; p < 128; p++) {
+            for (int p = 0; p < 128; p++) {
                 networkg0_neuron[p] = 0;
-                for (q = 0; q < 32; q++) {
+                for (int q = 0; q < 32; q++) {
                     networkg0_neuron[p] += networkg1_neuron[q] * network1[(q * 128) + p];
                 }
                 if (networkb0[p] < 0) {
                     networkg0_neuron[p] *= exp(networkb0[p]);
                 }
-                _mm_prefetch((const char*)(networkg0 + (p * 784)), _MM_HINT_T0);
+                //_mm_prefetch((const char*)(networkg0 + (p * 784)), _MM_HINT_T0);
                 factor = _mm256_set1_ps(networkg0_neuron[p]);
-                for (i = 0; i <= 784 - 56; i += 56) {
-                    __asm__ volatile (
-                        // Load 7 ymm registers from a
-                        "vmovaps (%0), %%ymm0\n"
-                        "vmovaps 0x20(%0), %%ymm1\n"
-                        "vmovaps 0x40(%0), %%ymm2\n"
-                        "vmovaps 0x60(%0), %%ymm3\n"
-                        "vmovaps 0x80(%0), %%ymm4\n"
-                        "vmovaps 0xa0(%0), %%ymm5\n"
-                        "vmovaps 0xc0(%0), %%ymm6\n"
-
-                        // Load 7 ymm registers from b
-                        "vmovaps (%1), %%ymm7\n"
-                        "vmovaps 0x20(%1), %%ymm8\n"
-                        "vmovaps 0x40(%1), %%ymm9\n"
-                        "vmovaps 0x60(%1), %%ymm10\n"
-                        "vmovaps 0x80(%1), %%ymm11\n"
-                        "vmovaps 0xa0(%1), %%ymm12\n"
-                        "vmovaps 0xc0(%1), %%ymm13\n"
-
-                        // Load factor_vec into ymm14
-                        "vmovaps %2, %%ymm14\n"
-
-                        // Multiply a by factor and add to b using vfmadd231ps
-                        "vfmadd231ps %%ymm14, %%ymm0, %%ymm7\n"
-                        "vfmadd231ps %%ymm14, %%ymm1, %%ymm8\n"
-                        "vfmadd231ps %%ymm14, %%ymm2, %%ymm9\n"
-                        "vfmadd231ps %%ymm14, %%ymm3, %%ymm10\n"
-                        "vfmadd231ps %%ymm14, %%ymm4, %%ymm11\n"
-                        "vfmadd231ps %%ymm14, %%ymm5, %%ymm12\n"
-                        "vfmadd231ps %%ymm14, %%ymm6, %%ymm13\n"
-
-                        // Store results back to b
-                        "vmovaps %%ymm7, (%1)\n"
-                        "vmovaps %%ymm8, 0x20(%1)\n"
-                        "vmovaps %%ymm9, 0x40(%1)\n"
-                        "vmovaps %%ymm10, 0x60(%1)\n"
-                        "vmovaps %%ymm11, 0x80(%1)\n"
-                        "vmovaps %%ymm12, 0xa0(%1)\n"
-                        "vmovaps %%ymm13, 0xc0(%1)\n"
-
-                        : // No output operands
-                        : "r" (train_image[thisDtId] + i), "r" (networkg0 + (p * 784) + i), "x" (factor)
-                        : "memory", "ymm0", "ymm1", "ymm2", "ymm3", "ymm4", "ymm5", "ymm6", "ymm7", "ymm8", "ymm9", "ymm10", "ymm11", "ymm12", "ymm13", "ymm14"
-                    );
-                }
+                bp_a(0)
+                bp_a(56)
+                bp_a(112)
+                bp_a(168)
+                bp_a(224)
+                bp_a(280)
+                bp_a(336)
+                bp_a(392)
+                bp_a(448)
+                bp_a(504)
+                bp_a(560)
+                bp_a(616)
+                bp_a(672)
+                bp_a(728)
             }
-            for (p = 0; p < 128; p += 64) {
+            for (int p = 0; p < 128; p += 64) {
                 __asm__ volatile (
                     "vmovaps (%0), %%ymm0\n"
                     "vmovaps 0x20(%0), %%ymm1\n"
@@ -561,7 +622,7 @@ inline void trainNet(int TId/*Thread Id*/) {
 
 
             //Clear Temp
-            _mm_prefetch((const char*)(networkb0), _MM_HINT_T0);
+            //_mm_prefetch((const char*)(networkb0), _MM_HINT_T0);
             std::fill(networkn0, networkn0 + 128, 0);
             std::fill(networkn1, networkn1 + 32, 0);
             std::fill(networkn2, networkn2 + 10, 0);
@@ -575,12 +636,13 @@ inline void trainNet(int TId/*Thread Id*/) {
         mtx_index_2 = 0;
         mtx_index_1 = 0;
         mtx_index_0 = 0;
-        for (; !networkg2_todoList[0] || !networkg1_todoList[0] || !networkg0_todoList[0] || !networkg0_todoList[1] || !networkg0_todoList[2] || !networkg0_todoList[3] || !networkg0_todoList[4] || !networkg0_todoList[5] || !networkg0_todoList[6] || !networkg0_todoList[7];) {//Update All Blocks
+        for (; !networkg2_todoList[0] || !networkg1_todoList[0] || !networkg0_todoList[0] || !networkg0_todoList[1] || !networkg0_todoList[2] || !networkg0_todoList[3] || !networkg0_todoList[4] || !networkg0_todoList[5] || !networkg0_todoList[6] || !networkg0_todoList[7]
+                 || !networkg0_todoList[8] || !networkg0_todoList[9] || !networkg0_todoList[10] || !networkg0_todoList[11] || !networkg0_todoList[12] || !networkg0_todoList[13] || !networkg0_todoList[14] || !networkg0_todoList[15];) {//Update All Blocks
             //Find a Free Block to update
             if (!networkg2_todoList[0]) {
                 if (networkgs2_mtx[mtx_index_2].try_lock()) {
-                    _mm_prefetch((const char*)(networkg2), _MM_HINT_T0);
-                    for (p = 0; p < 10; p++) {
+                    //_mm_prefetch((const char*)(networkg2), _MM_HINT_T0);
+                    for (int p = 0; p < 10; p++) {
                         __asm__ volatile (
                             // Load 4 ymm registers from a
                             "vmovaps (%0), %%ymm0\n"
@@ -620,9 +682,9 @@ inline void trainNet(int TId/*Thread Id*/) {
             }
             if (!networkg1_todoList[0]) {
                 if (networkgs1_mtx[mtx_index_1].try_lock()) {
-                    _mm_prefetch((const char*)(networkg1), _MM_HINT_T0);
-                    for (p = 0; p < 32; p++) {
-                        for (i = 0; i <= 128 - 64; i += 64) {
+                    //_mm_prefetch((const char*)(networkg1), _MM_HINT_T0);
+                    for (int p = 0; p < 32; p++) {
+                        for (int i = 0; i <= 128 - 64; i += 64) {
                             __asm__ volatile (
                                 // Load 8 ymm registers from a
                                 "vmovaps (%0), %%ymm0\n"
@@ -678,11 +740,11 @@ inline void trainNet(int TId/*Thread Id*/) {
                     networkg1_todoList[mtx_index_1] = true;
                 }
             }
-            for (mtx_index_0 = 0; mtx_index_0 < 8; mtx_index_0++) {
+            for (mtx_index_0 = 0; mtx_index_0 < 16; mtx_index_0++) {
                 if (!networkg0_todoList[mtx_index_0]) {
                     if (networkgs0_mtx[mtx_index_0].try_lock()) {
-                        if (mtx_index_0 == 7) {
-                            for (p = 0; p <= 128 - 64; p += 64) {
+                        if (mtx_index_0 == 15) {
+                            for (int p = 0; p <= 128 - 64; p += 64) {
                                 _mm256_store_ps(networkgs0_bi + p, _mm256_add_ps(_mm256_load_ps(networkgs0_bi + p), _mm256_load_ps(networkg0_bi + p)));
                                 _mm256_store_ps(networkgs0_bi + p + 8, _mm256_add_ps(_mm256_load_ps(networkgs0_bi + p + 8), _mm256_load_ps(networkg0_bi + p + 8)));
                                 _mm256_store_ps(networkgs0_bi + p + 16, _mm256_add_ps(_mm256_load_ps(networkgs0_bi + p + 16), _mm256_load_ps(networkg0_bi + p + 16)));
@@ -693,74 +755,35 @@ inline void trainNet(int TId/*Thread Id*/) {
                                 _mm256_store_ps(networkgs0_bi + p + 56, _mm256_add_ps(_mm256_load_ps(networkgs0_bi + p + 56), _mm256_load_ps(networkg0_bi + p + 56)));
                             }
                         }
-                        _mm_prefetch((const char*)(networkg0 + (12544 * mtx_index_0)), _MM_HINT_T0);
-                        for (p = 0; p < 16; p++) {
-                            for (i = 0; i <= 784 - 64; i += 64) {
-                                __asm__ volatile (
-                                    // Load 8 ymm registers from a
-                                    "vmovaps (%0), %%ymm0\n"
-                                    "vmovaps 0x20(%0), %%ymm1\n"
-                                    "vmovaps 0x40(%0), %%ymm2\n"
-                                    "vmovaps 0x60(%0), %%ymm3\n"
-                                    "vmovaps 0x80(%0), %%ymm4\n"
-                                    "vmovaps 0xa0(%0), %%ymm5\n"
-                                    "vmovaps 0xc0(%0), %%ymm6\n"
-                                    "vmovaps 0xe0(%0), %%ymm7\n"
-
-                                    // Load 8 ymm registers from b
-                                    "vmovaps (%1), %%ymm8\n"
-                                    "vmovaps 0x20(%1), %%ymm9\n"
-                                    "vmovaps 0x40(%1), %%ymm10\n"
-                                    "vmovaps 0x60(%1), %%ymm11\n"
-                                    "vmovaps 0x80(%1), %%ymm12\n"
-                                    "vmovaps 0xa0(%1), %%ymm13\n"
-                                    "vmovaps 0xc0(%1), %%ymm14\n"
-                                    "vmovaps 0xe0(%1), %%ymm15\n"
-
-                                    // Add corresponding ymm registers
-                                    "vaddps %%ymm8, %%ymm0, %%ymm0\n"
-                                    "vaddps %%ymm9, %%ymm1, %%ymm1\n"
-                                    "vaddps %%ymm10, %%ymm2, %%ymm2\n"
-                                    "vaddps %%ymm11, %%ymm3, %%ymm3\n"
-                                    "vaddps %%ymm12, %%ymm4, %%ymm4\n"
-                                    "vaddps %%ymm13, %%ymm5, %%ymm5\n"
-                                    "vaddps %%ymm14, %%ymm6, %%ymm6\n"
-                                    "vaddps %%ymm15, %%ymm7, %%ymm7\n"
-
-                                    // Store results back to memory
-                                    "vmovaps %%ymm0, (%1)\n"
-                                    "vmovaps %%ymm1, 0x20(%1)\n"
-                                    "vmovaps %%ymm2, 0x40(%1)\n"
-                                    "vmovaps %%ymm3, 0x60(%1)\n"
-                                    "vmovaps %%ymm4, 0x80(%1)\n"
-                                    "vmovaps %%ymm5, 0xa0(%1)\n"
-                                    "vmovaps %%ymm6, 0xc0(%1)\n"
-                                    "vmovaps %%ymm7, 0xe0(%1)\n"
-
-                                    : // No output operands
-                                    : "r" (networkg0 + ((mtx_index_0 * 16 + p) * 784) + i), "r" (networkgs0 + ((mtx_index_0 * 16 + p) * 784) + i)
-                                    : "memory", "ymm0", "ymm1", "ymm2", "ymm3", "ymm4", "ymm5", "ymm6", "ymm7", "ymm8", "ymm9", "ymm10", "ymm11", "ymm12", "ymm13", "ymm14", "ymm15"
-                                );
-                            }
+                        //_mm_prefetch((const char*)(networkg0 + (6272 * mtx_index_0)), _MM_HINT_T0);
+                        for (int p = 0; p < 8; p++) {
+                            forward_a(0)
+                            forward_a(64)
+                            forward_a(128)
+                            forward_a(192)
+                            forward_a(256)
+                            forward_a(320)
+                            forward_a(384)
+                            forward_a(448)
+                            forward_a(512)
+                            forward_a(576)
+                            forward_a(640)
+                            forward_a(704)
                             __asm__ volatile (
-                                // Load 2 ymm registers from a
                                 "vmovaps (%0), %%ymm0\n"
                                 "vmovaps 0x20(%0), %%ymm1\n"
 
-                                // Load 2 ymm registers from b
                                 "vmovaps (%1), %%ymm2\n"
                                 "vmovaps 0x20(%1), %%ymm3\n"
 
-                                // Add corresponding ymm registers
                                 "vaddps %%ymm2, %%ymm0, %%ymm0\n"
                                 "vaddps %%ymm3, %%ymm1, %%ymm1\n"
 
-                                // Store results back to memory
                                 "vmovaps %%ymm0, (%1)\n"
                                 "vmovaps %%ymm1, 0x20(%1)\n"
 
-                                : // No output operands
-                                : "r" (networkg0 + ((mtx_index_0 * 16 + p) * 784) + i), "r" (networkgs0 + ((mtx_index_0 * 16 + p) * 784) + i)
+                                : 
+                                : "r" (networkg0 + ((mtx_index_0 * 8 + p) * 784) + 768), "r" (networkgs0 + ((mtx_index_0 * 8 + p) * 784) + 768)
                                 : "memory", "ymm0", "ymm1", "ymm2", "ymm3"
                             );
                         }
@@ -773,18 +796,18 @@ inline void trainNet(int TId/*Thread Id*/) {
         //Init todoList
         networkg2_todoList[0] = false;
         networkg1_todoList[0] = false;
-        for (i = 0; i < 8; i++) {
+        for (int i = 0; i < 16; i++) {
             networkg0_todoList[i] = false;
         }
 
         //Clear Temp
-        _mm_prefetch((const char*)(networkg0), _MM_HINT_T0);
+        //_mm_prefetch((const char*)(networkg0), _MM_HINT_T0);
         std::fill(networkg0, networkg0 + 100352, 0);
         std::fill(networkg0_bi, networkg0_bi + 128, 0);
-        _mm_prefetch((const char*)(networkg1), _MM_HINT_T0);
+        //_mm_prefetch((const char*)(networkg1), _MM_HINT_T0);
         std::fill(networkg1, networkg1 + 4096, 0);
         std::fill(networkg1_bi, networkg1_bi + 32, 0);
-        _mm_prefetch((const char*)(networkg2), _MM_HINT_T0);
+        //_mm_prefetch((const char*)(networkg2), _MM_HINT_T0);
         std::fill(networkg2, networkg2 + 320, 0);
         std::fill(networkg2_bi, networkg2_bi + 10, 0);
 
@@ -793,13 +816,13 @@ inline void trainNet(int TId/*Thread Id*/) {
         reportI++;//This Thread Finished BP
         if (reportI == tpool->TSize) {//If All Threads Finished BP
             //Update Weights & Bias
-            _mm_prefetch((const char*)(networkg0), _MM_HINT_T0);
+            //_mm_prefetch((const char*)(networkg0), _MM_HINT_T0);
             memcpy(network0, networkgs0, 401408);
             memcpy(network0_bi, networkgs0_bi, 512);
-            _mm_prefetch((const char*)(networkg1), _MM_HINT_T0);
+            //_mm_prefetch((const char*)(networkg1), _MM_HINT_T0);
             memcpy(network1, networkgs1, 16384);
             memcpy(network1_bi, networkgs1_bi, 128);
-            _mm_prefetch((const char*)(networkg2), _MM_HINT_T0);
+            //_mm_prefetch((const char*)(networkg2), _MM_HINT_T0);
             memcpy(network2, networkgs2, 1280);
             memcpy(network2_bi, networkgs2_bi, 40);
 
@@ -853,7 +876,7 @@ void train(float rate, float aim) {
         auto end = std::chrono::high_resolution_clock::now();
         duration = end - start;
 
-        rate *= 1.01f;
+        //rate *= 1.01f;
 
         if (err <= aim) {
             std::cout << "------------------------------" << std::endl;
@@ -925,12 +948,12 @@ int main() {
         return 1;
     }*/
 
-    batchSize = 50;
-    std::vector<std::thread> threads = tpool->init(10);//BatchSize must be a positive integer multiple of the number of threads
+    batchSize = 90;
+    std::vector<std::thread> threads = tpool->init(15);//BatchSize must be a positive integer multiple of the number of threads
 
-    rate = 0.0003;//Learning Rate
+    rate = 0.001;//Learning Rate
     aim = 0.01;//Aiming Loss(MSE in total)
-    dts = 50000;//Data Limited(Max 60000)
+    dts = 100;//Data Limited(Max 60000)
 
     std::cout << "2/3 Load Training Data" << endl;
 
