@@ -2,227 +2,236 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <time.h>      
-#include <immintrin.h> 
-#include <math.h>      
-#include <float.h>     
+#include <time.h>
+#include <immintrin.h>
+#include <stdint.h>
+#include <math.h>
+#include <float.h>
 
 #define VECTOR_SIZE 104857600
-#define NUM_RUNS 20
-#define BLOCK_NUM 1 
+#define NUM_RUNS 200
+
+
+typedef float FLOAT;
+
+#if defined(_WIN64) || defined(__x86_64__) || defined(_M_X64) || defined(__aarch64__)
+    typedef intptr_t BLASLONG;
+#else
+    typedef long BLASLONG;
+#endif
 
 
 #ifndef CLOCK_MONOTONIC
 #define CLOCK_MONOTONIC 1
 #endif
 
-
-inline double timespec_diff_ms(struct timespec *start, struct timespec *end) {
-    struct timespec temp;
-    if ((end->tv_nsec - start->tv_nsec) < 0) {
-        temp.tv_sec = end->tv_sec - start->tv_sec - 1;
-        temp.tv_nsec = 1000000000 + end->tv_nsec - start->tv_nsec;
-    } else {
-        temp.tv_sec = end->tv_sec - start->tv_sec;
-        temp.tv_nsec = end->tv_nsec - start->tv_nsec;
-    }
-    return (double)temp.tv_sec * 1000.0 + (double)temp.tv_nsec / 1000000.0;
-}
-
-
 int main() {
-    
     srand(time(NULL));
 
-    const int size_per_block = VECTOR_SIZE / BLOCK_NUM;
+    const BLASLONG vector_len = VECTOR_SIZE;
 
     
-    if (size_per_block % 8 != 0) {
-        fprintf(stderr, "Error: VECTOR_SIZE / BLOCK_NUM (%d) must be divisible by 8 for AVX operations.\n", size_per_block);
+    if (vector_len % 8 != 0) {
+        fprintf(stderr, "Error: VECTOR_SIZE (%lld) must be divisible by 8 for AVX operations.\n", vector_len);
         return 1;
     }
-     
-     if (VECTOR_SIZE < 56 && VECTOR_SIZE != 16) {
-         fprintf(stderr, "Warning: VECTOR_SIZE is too small for the main loop structure and the specific remainder handling.\n");
-         
-     }
     
-    float **vectorA = (float **)malloc(BLOCK_NUM * sizeof(float *));
-    float **vectorB = (float **)malloc(BLOCK_NUM * sizeof(float *));
+    
+    FLOAT *vectorA = (FLOAT *)_mm_malloc((size_t)vector_len * sizeof(FLOAT), 32);
+    FLOAT *vectorB = (FLOAT *)_mm_malloc((size_t)vector_len * sizeof(FLOAT), 32);
     if (!vectorA || !vectorB) {
-        perror("Failed to allocate block pointers");
+        perror("Failed to allocate aligned memory");
+        if (vectorA) _mm_free(vectorA);
+        if (vectorB) _mm_free(vectorB);
         return 1;
     }
-    
-    for (int i = 0; i < BLOCK_NUM; i++) {
-        vectorA[i] = (float *)_mm_malloc((size_t)size_per_block * sizeof(float), 32); 
-        vectorB[i] = (float *)_mm_malloc((size_t)size_per_block * sizeof(float), 32); 
-        if (!vectorA[i] || !vectorB[i]) {
-            fprintf(stderr, "Failed to allocate aligned memory for block %d\n", i);
-            
-            for(int k=0; k<i; ++k) {
-                 if(vectorA[k]) _mm_free(vectorA[k]);
-                 if(vectorB[k]) _mm_free(vectorB[k]);
-            }
-            if(vectorA[i]) _mm_free(vectorA[i]); 
-            free(vectorA);
-            free(vectorB);
-            return 1;
-        }
-    }
 
     
-    for (int i = 0; i < BLOCK_NUM; i++) {
-        for (int j = 0; j < size_per_block; j++) {
-            
-            vectorA[i][j] = ((float)rand() / (float)(RAND_MAX)) * 2.0f - 1.0f;
-            vectorB[i][j] = ((float)rand() / (float)(RAND_MAX)) * 2.0f - 1.0f;
-        }
+    printf("Initializing vectors (size: %lld)...\n", vector_len);
+    for (BLASLONG j = 0; j < vector_len; j++) {
+        vectorA[j] = ((float)rand() / (float)(RAND_MAX)) * 2.0f - 1.0f;
+        vectorB[j] = ((float)rand() / (float)(RAND_MAX)) * 2.0f - 1.0f;
     }
 
-    double dot_product = 0.0; 
-    double *runtimes = (double *)malloc(NUM_RUNS * sizeof(double));
-    if (!runtimes) {
+    double *runtimes_ms = (double *)malloc(NUM_RUNS * sizeof(double));
+     if (!runtimes_ms) {
          perror("Failed to allocate runtimes array");
-         
-         for (int i = 0; i < BLOCK_NUM; i++) {
-             _mm_free(vectorA[i]);
-             _mm_free(vectorB[i]);
-         }
-         free(vectorA);
-         free(vectorB);
+         _mm_free(vectorA);
+         _mm_free(vectorB);
          return 1;
     }
 
 
-    struct timespec start_time_ts, end_time_ts; 
+    struct timespec start_time_ts, end_time_ts;
+    double final_dot_product = 0.0;
 
+
+    printf("Running benchmark (%d runs)...\n", NUM_RUNS);
     for (int run = 0; run < NUM_RUNS; run++) {
-        __m128 sum_high;
-        __m128 sum_low;
-        int i; 
-        int j = 0; 
 
         clock_gettime(CLOCK_MONOTONIC, &start_time_ts);
+        
 
-        __m256 sum = _mm256_setzero_ps(); 
+        __m256 sum_vec0 = _mm256_setzero_ps();
+        __m256 sum_vec1 = _mm256_setzero_ps();
+        __m256 sum_vec2 = _mm256_setzero_ps();
+        __m256 sum_vec3 = _mm256_setzero_ps();
+        __m256 sum_vec4 = _mm256_setzero_ps();
+        __m256 sum_vec5 = _mm256_setzero_ps();
+        __m256 sum_vec6 = _mm256_setzero_ps();
+        __m256 sum_vec7 = _mm256_setzero_ps();
 
-        for (i = 0; i < BLOCK_NUM; i++) {
-            _mm_prefetch((const char*)(vectorA[i]), _MM_HINT_T0);
-            _mm_prefetch((const char*)(vectorB[i]), _MM_HINT_T0);
+        FLOAT *ptrA = vectorA;
+        FLOAT *ptrB = vectorB;
+        BLASLONG n = vector_len;
+        BLASLONG j = 0;
 
-            j = 0; 
-            
-            int limit = size_per_block - 56;
+        
+        BLASLONG n_loops_64 = n / 64;
 
-            for (; j <= limit; j += 56) { 
-                __asm__ volatile (
-                    
-                    "vmovaps (%1), %%ymm0\n"
-                    "vmovaps 0x20(%1), %%ymm2\n"
-                    "vmovaps 0x40(%1), %%ymm4\n"
-                    "vmovaps 0x60(%1), %%ymm6\n"
-                    "vmovaps 0x80(%1), %%ymm8\n"
-                    "vmovaps 0xa0(%1), %%ymm10\n"
-                    "vmovaps 0xc0(%1), %%ymm12\n"
+        if (n_loops_64 > 0) {
+            BLASLONG loop_idx = 0;
+            BLASLONG n_actual_loops = n_loops_64;
 
-                    
-                    "vmovaps (%2), %%ymm1\n"
-                    "vmovaps 0x20(%2), %%ymm3\n"
-                    "vmovaps 0x40(%2), %%ymm5\n"
-                    "vmovaps 0x60(%2), %%ymm7\n"
-                    "vmovaps 0x80(%2), %%ymm9\n"
-                    "vmovaps 0xa0(%2), %%ymm11\n"
-                    "vmovaps 0xc0(%2), %%ymm13\n"
+            __asm__  __volatile__
+            (
+                
+                ".p2align 5                                    \n\t"
+                "1:                                            \n\t"
 
-                    
-                    "vfmadd231ps %%ymm0, %%ymm1, %0\n" 
-                    "vfmadd231ps %%ymm2, %%ymm3, %0\n"
-                    "vfmadd231ps %%ymm4, %%ymm5, %0\n"
-                    "vfmadd231ps %%ymm6, %%ymm7, %0\n"
-                    "vfmadd231ps %%ymm8, %%ymm9, %0\n"
-                    "vfmadd231ps %%ymm10, %%ymm11, %0\n"
-                    "vfmadd231ps %%ymm12, %%ymm13, %0\n"
+                
+                
+                
+                "vmovaps                  (%[a],%[li],4), %%ymm8          \n\t"
+                "vmovaps                32(%[a],%[li],4), %%ymm9          \n\t"
+                "vmovaps                64(%[a],%[li],4), %%ymm10         \n\t"
+                "vmovaps                96(%[a],%[li],4), %%ymm11         \n\t"
+                "vmovaps               128(%[a],%[li],4), %%ymm12         \n\t"
+                "vmovaps               160(%[a],%[li],4), %%ymm13         \n\t"
+                "vmovaps               192(%[a],%[li],4), %%ymm14         \n\t"
+                "vmovaps               224(%[a],%[li],4), %%ymm15         \n\t"
 
-                    : "+x" (sum) 
-                    : "r" (vectorA[i] + j), "r" (vectorB[i] + j) 
-                    : "memory", 
-                      
-                      "ymm0", "ymm1", "ymm2", "ymm3", "ymm4", "ymm5", "ymm6", "ymm7",
-                      "ymm8", "ymm9", "ymm10", "ymm11", "ymm12", "ymm13"
-                );
-            } 
-            
-            if (size_per_block - j == 16) {
-                 __asm__ volatile (
-                    
-                    "vmovaps (%1), %%ymm0\n"
-                    "vmovaps 0x20(%1), %%ymm2\n"
+                
+                
+                "vfmadd231ps      (%[b],%[li],4), %%ymm8 , %[s0] \n\t"
+                "vfmadd231ps    32(%[b],%[li],4), %%ymm9 , %[s1] \n\t"
+                "vfmadd231ps    64(%[b],%[li],4), %%ymm10, %[s2] \n\t"
+                "vfmadd231ps    96(%[b],%[li],4), %%ymm11, %[s3] \n\t"
+                "vfmadd231ps   128(%[b],%[li],4), %%ymm12, %[s4] \n\t"
+                "vfmadd231ps   160(%[b],%[li],4), %%ymm13, %[s5] \n\t"
+                "vfmadd231ps   192(%[b],%[li],4), %%ymm14, %[s6] \n\t"
+                "vfmadd231ps   224(%[b],%[li],4), %%ymm15, %[s7] \n\t"
 
-                    
-                    "vmovaps (%2), %%ymm1\n"
-                    "vmovaps 0x20(%2), %%ymm3\n"
 
-                    
-                    "vfmadd231ps %%ymm0, %%ymm1, %0\n"
-                    "vfmadd231ps %%ymm2, %%ymm3, %0\n"
+                
+                "addq       $64 , %[li]                   \n\t"
+                "subq       $1  , %[nl]                   \n\t"
+                "jnz        1b                            \n\t"
 
-                    : "+x" (sum)
-                    : "r" (vectorA[i] + j), "r" (vectorB[i] + j)
-                    : "memory", "ymm0", "ymm1", "ymm2", "ymm3"
-                 );
-                 
-            }
+                
+                : [li] "+r" (loop_idx),
+                  [nl] "+r" (n_actual_loops),
+                  [s0] "+v" (sum_vec0), [s1] "+v" (sum_vec1),
+                  [s2] "+v" (sum_vec2), [s3] "+v" (sum_vec3),
+                  [s4] "+v" (sum_vec4), [s5] "+v" (sum_vec5),
+                  [s6] "+v" (sum_vec6), [s7] "+v" (sum_vec7)
+                
+                : [a] "r" (ptrA),
+                  [b] "r" (ptrB)
+                
+                : "memory", "cc",
+                  
+                  "ymm8", "ymm9", "ymm10", "ymm11",
+                  "ymm12", "ymm13", "ymm14", "ymm15"
+            );
+            j = loop_idx;
         } 
 
+
+        sum_vec0 = _mm256_add_ps(sum_vec0, sum_vec4);
+        sum_vec1 = _mm256_add_ps(sum_vec1, sum_vec5);
+        sum_vec2 = _mm256_add_ps(sum_vec2, sum_vec6);
+        sum_vec3 = _mm256_add_ps(sum_vec3, sum_vec7);
+
+        sum_vec0 = _mm256_add_ps(sum_vec0, sum_vec2);
+        sum_vec1 = _mm256_add_ps(sum_vec1, sum_vec3);
+
+        sum_vec0 = _mm256_add_ps(sum_vec0, sum_vec1);
         
-        sum_high = _mm256_extractf128_ps(sum, 1); 
-        sum_low = _mm256_extractf128_ps(sum, 0);  
-        sum_low = _mm_add_ps(sum_low, sum_high);   
         
+        BLASLONG remaining = n - j;
+        while (remaining >= 8) {
+            __m256 a_vec = _mm256_load_ps(ptrA + j);
+            __m256 b_vec = _mm256_load_ps(ptrB + j);
+            
+            
+            sum_vec0 = _mm256_fmadd_ps(a_vec, b_vec, sum_vec0);
+            j += 8;
+            remaining -= 8;
+        }
+
+        __m128 sum_high = _mm256_extractf128_ps(sum_vec0, 1);
+        __m128 sum_low  = _mm256_castps256_ps128(sum_vec0);
+        
+        sum_low = _mm_add_ps(sum_low, sum_high);
         
         sum_low = _mm_hadd_ps(sum_low, sum_low);
-        
         sum_low = _mm_hadd_ps(sum_low, sum_low);
+
         
-        dot_product = (double)_mm_cvtss_f32(sum_low); 
+        float vector_dot_product_f = _mm_cvtss_f32(sum_low);
+        final_dot_product = (double)vector_dot_product_f;
+
+
+        double scalar_sum = 0.0;
+        while (remaining > 0) {
+            scalar_sum += (double)ptrA[j] * (double)ptrB[j];
+            j++;
+            remaining--;
+        }
+        final_dot_product += scalar_sum;
 
         clock_gettime(CLOCK_MONOTONIC, &end_time_ts);
-        runtimes[run] = timespec_diff_ms(&start_time_ts, &end_time_ts);
-    } 
 
-    
-    printf("Dot product: %f\n", dot_product);
+        
+        double start_ms = (double)start_time_ts.tv_sec * 1000.0 + (double)start_time_ts.tv_nsec / 1000000.0;
+        double end_ms   = (double)end_time_ts.tv_sec * 1000.0 + (double)end_time_ts.tv_nsec / 1000000.0;
+        runtimes_ms[run] = end_ms - start_ms;
 
+    }
     
-    double time_sum = 0.0;
-    
-    double min_time = (NUM_RUNS > 0) ? runtimes[0] : 0.0;
-    double max_time = (NUM_RUNS > 0) ? runtimes[0] : 0.0;
+    printf("Dot product (last run): %f\n", final_dot_product);
+
+    double time_sum_ms = 0.0;
+    double min_time_ms = (NUM_RUNS > 0) ? runtimes_ms[0] : 0.0;
+    double max_time_ms = (NUM_RUNS > 0) ? runtimes_ms[0] : 0.0;
 
     for (int run = 0; run < NUM_RUNS; run++) {
-        time_sum += runtimes[run];
-        if (runtimes[run] < min_time) {
-            min_time = runtimes[run];
+        time_sum_ms += runtimes_ms[run];
+        if (runtimes_ms[run] < min_time_ms) {
+            min_time_ms = runtimes_ms[run];
         }
-        if (runtimes[run] > max_time) {
-            max_time = runtimes[run];
+        if (runtimes_ms[run] > max_time_ms) {
+            max_time_ms = runtimes_ms[run];
         }
     }
 
-    double avg_time = (NUM_RUNS > 0) ? (time_sum / NUM_RUNS) : 0.0;
-    printf("Average time: %f ms\n", avg_time);
-    printf("Minimum time: %f ms\n", min_time);
-    printf("Maximum time: %f ms\n", max_time);
+    double avg_time_ms = (NUM_RUNS > 0) ? (time_sum_ms / NUM_RUNS) : 0.0;
+    printf("Average time: %f ms\n", avg_time_ms);
+    printf("Minimum time: %f ms\n", min_time_ms);
+    printf("Maximum time: %f ms\n", max_time_ms);
 
     
-    for (int i = 0; i < BLOCK_NUM; i++) {
-        _mm_free(vectorA[i]);
-        _mm_free(vectorB[i]);
+    if (avg_time_ms > 0) {
+        double avg_time_s = avg_time_ms / 1000.0;
+        double total_flops = (double)vector_len * 2.0;
+        double gflops = total_flops / (avg_time_s * 1e9);
+        printf("Average Effective Computation GFLOPS: %f\n", gflops);
     }
-    free(vectorA);
-    free(vectorB);
-    free(runtimes);
+
+    _mm_free(vectorA);
+    _mm_free(vectorB);
+    free(runtimes_ms);
 
     return 0;
 }
